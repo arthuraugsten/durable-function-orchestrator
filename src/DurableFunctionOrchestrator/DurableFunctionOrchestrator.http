@@ -12,13 +12,20 @@
 #   - Payment over 10,000                 -> payment declined, reserved inventory released (compensation)
 #   - SKU starting with "OUT-OF-STOCK"    -> unhandled failure: the orchestration fails after 3 attempts (~6s)
 #   - Email ending with "@bounce.test"    -> confirmation fails, but the order still completes (ContinueOnError)
+#
+# Shipping labels come from a simulated carrier HTTP API hosted in this app (Orders/SimulatedCarrierApi.cs).
+# It is asynchronous: POST returns 202 + a Location status URL, and the fulfillment sub-orchestration polls
+# that URL every 2s (timeout 20s) until the label is ready, which takes about 5s. So a successful order
+# takes ~6s to complete; while it polls, customStatus.detail is "FulfillmentOrchestrator".
+#   - SKU starting with "OVERSIZED"       -> the carrier rejects the label: payment refunded, inventory released
+#   - SKU starting with "SLOW-SHIP"       -> the label is never ready in time: polling times out after 20s
 
 @baseUrl = http://localhost:7071
 
 
 ### ✅ 1. Happy path: every step runs, including loyalty points
-# Expected: runtimeStatus "Completed", output.status "Completed" with reservation, transaction,
-# tracking number (from the fulfillment sub-orchestration) and loyaltyPointsAwarded.
+# Expected (after ~6s of label polling): runtimeStatus "Completed", output.status "Completed" with
+# reservation, transaction, tracking number (from the carrier's label) and loyaltyPointsAwarded.
 # @name happyPath
 POST {{baseUrl}}/api/orders
 Content-Type: application/json
@@ -131,7 +138,46 @@ Content-Type: application/json
 GET {{outOfStock.response.body.$.statusQueryGetUri}}
 
 
-### ❌ 7. Bad request: rejected by the HTTP starter, no orchestration is started
+### ❌ 7. Polling failure: the carrier rejects the shipping label
+# Expected (after ~6s): runtimeStatus "Completed", output.status "FulfillmentFailed", output.notes
+# ["Step 'ShippingLabel' (Polling 'RequestShippingLabel') failed: Carrier rejected shipment 'SHP-ORD-1007': ..."].
+# The host log shows the compensation: "Refunded ..." then "Released inventory reservation ...".
+# @name carrierRejects
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{
+  "orderId": "ORD-1007",
+  "customerEmail": "marie@contoso.com",
+  "lines": [
+    { "sku": "OVERSIZED-SOFA", "quantity": 1, "unitPrice": 899.00 }
+  ]
+}
+
+### ❌ 7. Status
+GET {{carrierRejects.response.body.$.statusQueryGetUri}}
+
+
+### ❌ 8. Polling timeout: the carrier never finishes the label in time
+# Expected (after ~20s of checks every 2s): runtimeStatus "Completed", output.status "FulfillmentFailed",
+# output.notes mentions "still pending after 20 second(s)". Payment refunded and inventory released.
+# @name carrierTooSlow
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{
+  "orderId": "ORD-1008",
+  "customerEmail": "alan@contoso.com",
+  "lines": [
+    { "sku": "SLOW-SHIP-PIANO", "quantity": 1, "unitPrice": 2400.00 }
+  ]
+}
+
+### ❌ 8. Status
+GET {{carrierTooSlow.response.body.$.statusQueryGetUri}}
+
+
+### ❌ 9. Bad request: rejected by the HTTP starter, no orchestration is started
 # Expected: 400 "Request body must be an order with an orderId."
 POST {{baseUrl}}/api/orders
 Content-Type: application/json
@@ -142,6 +188,21 @@ Content-Type: application/json
     { "sku": "KEYBOARD-01", "quantity": 1, "unitPrice": 49.99 }
   ]
 }
+
+
+### 🔎 Call the simulated carrier API directly: 202 Accepted with a Location header
+# @name carrierLabel
+POST {{baseUrl}}/api/carrier/labels
+Content-Type: application/json
+
+{
+  "shipmentId": "SHP-MANUAL-1",
+  "orderId": "ORD-MANUAL-1",
+  "skus": ["KEYBOARD-01"]
+}
+
+### 🔎 Poll the label: 202 for ~5s, then 200 with the label
+GET {{carrierLabel.response.headers.Location}}
 
 
 ### 🔎 List recent orchestration instances (built-in Durable Functions HTTP API)

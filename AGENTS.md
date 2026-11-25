@@ -8,8 +8,8 @@ A **pilot** for adding pipeline orchestration to an SDK. It has three projects:
 
 | Path | What it is |
 | --- | --- |
-| `src/DurableFunctionOrchestrator.Sdk` | **The SDK.** `ActivityOrchestrator<TInput, TOutput>`: a base class for Durable Task orchestrators that run a pipeline of activities and sub-orchestrations. Concrete classes declare *which* steps run; the base class handles *how* (sequencing, fan-out/fan-in, conditions, retries, early exit, progress, failure handling). |
-| `src/DurableFunctionOrchestrator` | **Example Azure Functions app** (isolated worker) that uses the SDK: an order pipeline (`Orders/`) with a fulfillment sub-orchestration, compensation and an HTTP starter. |
+| `src/DurableFunctionOrchestrator.Sdk` | **The SDK.** `ActivityOrchestrator<TInput, TOutput>`: a base class for Durable Task orchestrators that run a pipeline of activities and sub-orchestrations. Concrete classes declare *which* steps run; the base class handles *how* (sequencing, fan-out/fan-in, conditions, retries, polling of long-running operations, early exit, progress, failure handling). |
+| `src/DurableFunctionOrchestrator` | **Example Azure Functions app** (isolated worker) that uses the SDK: an order pipeline (`Orders/`) with a fulfillment sub-orchestration that polls a simulated asynchronous carrier HTTP API, compensation and an HTTP starter. |
 | `tests/DurableFunctionOrchestrator.Sdk.Tests` | **SDK unit tests** (xUnit v3), run against a fake `TaskOrchestrationContext`. |
 
 The SDK's user-facing documentation is [`src/DurableFunctionOrchestrator.Sdk/README.md`](src/DurableFunctionOrchestrator.Sdk/README.md). It is also the NuGet package readme. Read it to understand the public API.
@@ -80,6 +80,27 @@ To run the example app: start Azurite, then run `func start` in `src/DurableFunc
 - Nullable reference types are enabled, so keep the build free of nullable warnings.
 - Validate public arguments with `ArgumentNullException.ThrowIfNull` / `ArgumentException.ThrowIfNullOrWhiteSpace`.
 
+## SDK layout
+
+All SDK code is under `src/DurableFunctionOrchestrator.Sdk/Orchestrator/`. Folders group code by role; every file holds
+one type. **Namespaces are flat:** public types are in `DurableFunctionOrchestrator.Sdk` and internal types in
+`DurableFunctionOrchestrator.Sdk.Internal`, whatever their folder (`.editorconfig` turns off IDE0130 for this).
+
+| Folder | Visibility | Contents |
+| --- | --- | --- |
+| `Orchestrator/` | public | `ActivityOrchestrator`: the base class. Thin: builds the pipeline and hands it to `PipelineRunner`. |
+| `Steps/` | public | Identifying steps: the `Steps` factory, `StepHandle` / `StepHandle<TResult>`, `StepKind`. Data only. |
+| `Pipeline/` | public | Declaring a pipeline: `OrchestrationPipelineBuilder`, `ParallelStageBuilder`, `StepOptions`. |
+| `Polling/` | public | What polling check steps return: `PollStatus`, `PollState`, `PollingErrorTypes`. |
+| `Results/` | public | What you read: `OrchestrationState`, `OrchestrationProgress`, `StepFailedException`. |
+| `Internal/Definitions/` | internal | The declared pipeline as data, with no behaviour: `IPipelineStage`, `PipelineStep`, `PollingDefinition`, `StepOutcome`. |
+| `Internal/Building/` | internal | Validation when handles and pipelines are declared: `StepFactory` (unique names), `PollingValidator`. |
+| `Internal/Execution/` | internal | **All run logic**, everything that calls Durable Task: `PipelineRunner` (stage loop, progress), `StepStage` / `StopStage`, `StepInvoker` (activity and sub-orchestration calls), `PollingRunner`, `PollingSchedule`. |
+
+Keep it that way: public types hold no run logic (`StepHandle.InvokeAsync` is only a one-line hook that supplies the
+result type to `StepInvoker`), and anything that calls the `TaskOrchestrationContext` goes in `Internal/Execution/`.
+The tests mirror the folders (`tests/.../Orchestrator/Polling/PollingStepTests.cs`).
+
 ## SDK design rules
 
 These keep the SDK correct and consistent. Breaking them usually causes bugs that only show up in production replays.
@@ -88,7 +109,7 @@ These keep the SDK correct and consistent. Breaking them usually causes bugs tha
    orchestration, including `ConfigurePipeline`, input builders, conditions, `BuildOutput` and SDK internals, must not do I/O,
    read the clock (`DateTime.Now`), create GUIDs or random values, or depend on thread timing. Use
    `context.CurrentUtcDateTime` / `context.NewGuid()` where needed. Do real work in activities.
-2. **Keep parallel results deterministic.** `StepStage` awaits all branches, then applies outcomes **in declaration
+2. **Keep parallel results deterministic.** `StepStage` (`Internal/Execution/`) awaits all branches, then applies outcomes **in declaration
    order**. Keep it that way: never record results in completion order.
 3. **Steps are identified by typed handles, not strings.** `StepHandle<TResult>` / `StepHandle` are created with
    `Steps.Activity(...)` / `Steps.SubOrchestration(...)`. Results are read with `state.GetResult(handle)`, and failures
@@ -97,14 +118,18 @@ These keep the SDK correct and consistent. Breaking them usually causes bugs tha
    `InvalidOperationException` when the pipeline is built, with a message that says how to fix it.
 5. **Catch only `TaskFailedException`** around task calls. Other exceptions are bugs or runtime signals and must propagate.
 6. **Keep the public API small.** Public types live in the `DurableFunctionOrchestrator.Sdk` namespace. Implementation types go in
-   `Internal/` and are `internal`. Every public member needs XML docs (`GenerateDocumentationFile` is on).
+   `Orchestrator/Internal/` and are `internal` (see [SDK layout](#sdk-layout)). Every public member needs XML docs (`GenerateDocumentationFile` is on).
 7. **The base class owns execution.** `RunAsync` is `sealed`; extension points are `ConfigurePipeline`,
    `BuildOutput`, `DefaultTaskOptions` and `OnStepFailedAsync`. Add new behaviour as pipeline primitives or step options,
    not by opening up `RunAsync`.
 
 ### Adding a pipeline feature (e.g. a new stage type or step option)
 
-1. Implement it in the SDK. A new stage implements `Internal/IPipelineStage<TInput>`; a new step option goes on `StepOptions<TInput>`.
+1. Implement it in the SDK, following the [SDK layout](#sdk-layout):
+   - A new stage implements `IPipelineStage<TInput>` (`Internal/Definitions/`); the class goes in `Internal/Execution/`.
+   - A new step option goes on `StepOptions<TInput>` (`Pipeline/`), and its validation in `Internal/Building/`.
+   - A new kind of step gets a factory method on `Steps`, a `StepKind` value, and a runner in `Internal/Execution/`
+     that `StepInvoker` dispatches to (as polling does).
 2. Expose it through `OrchestrationPipelineBuilder` and, if it applies to parallel stages, `ParallelStageBuilder`.
 3. Add tests in `tests/DurableFunctionOrchestrator.Sdk.Tests` (see below).
 4. Update the SDK [`README.md`](src/DurableFunctionOrchestrator.Sdk/README.md): the API tables, an example, and the
@@ -129,6 +154,8 @@ Call out the break in your PR description.
     `Calls`, `CallNames` and `StatusHistory`.
   - **`TestOrchestrator<TInput>`:** takes the pipeline as a lambda, plus optional default task options and a failure handler. Its output
     is the final `OrchestrationState`, so tests can assert on results, skips and failures directly.
+- The fake's **durable timers complete at once** and move `CurrentUtcDateTime` forward to their fire time. `TimerSeconds`
+  lists them, in seconds after `FakeOrchestrationContext.Start`. Use it to test polling intervals and timeouts.
 - The fake **does not simulate retries or replay**. Test retry configuration by checking the `TaskOptions` passed to each call
   (see `Default_task_options_apply_unless_a_step_overrides_them`). Behaviour that depends on replay needs a real host.
 - Test names describe behaviour in sentence form: `Parallel_failure_is_raised_after_every_branch_finishes_...`.
@@ -141,11 +168,19 @@ Call out the break in your PR description.
 - **Step handles** are `private static readonly` fields on the orchestrator that uses them.
 - **Each orchestrator** exposes itself with a one-line function:
   `[Function(nameof(X))] public Task<TOutput> Run([OrchestrationTrigger] TaskOrchestrationContext context) => ExecuteAsync(context);`
-- **Activities are simulated.** They stand in for external systems. Certain inputs trigger failures on purpose, so every
-  pipeline outcome can be demonstrated. The trigger values are constants on `OrderActivities`:
+- **External systems are simulated.** Certain inputs trigger failures on purpose, so every pipeline outcome can be
+  demonstrated. The trigger values are constants on `OrderActivities`:
   - a payment over 10,000 is declined (compensation);
   - a SKU starting with `OUT-OF-STOCK` fails `ReserveInventory` (unhandled failure: the orchestration fails);
   - an email ending with `@bounce.test` fails `SendConfirmation` (`ContinueOnError`: the order still completes).
+- **The carrier is a real HTTP API, simulated in the same app.** `SimulatedCarrierApi` (`/api/carrier/labels`) answers
+  `202` + `Location` and produces a label after a few seconds. `CarrierActivities` call it through the named
+  `HttpClient` registered in `Program.cs` (`CarrierApiBaseUrl` setting, defaulting to the local host). They are the start
+  and check steps of the `FulfillmentOrchestrator` polling step. Its trigger values are constants on `SimulatedCarrierApi`:
+  - a SKU starting with `OVERSIZED` makes the carrier reject the label (the polling step fails; payment is refunded);
+  - a SKU starting with `SLOW-SHIP` never finishes in time (the polling step times out; payment is refunded).
+- **Activities that need services** (such as `IHttpClientFactory`) live in a non-static class with a standard
+  constructor, like `CarrierActivities`. Simple activities stay `static`.
 - [`DurableFunctionOrchestrator.http`](src/DurableFunctionOrchestrator/DurableFunctionOrchestrator.http) has a demo request
   for every scenario, each with a follow-up status request. Keep it in sync when you add a scenario or change a trigger.
 
@@ -154,6 +189,8 @@ Call out the break in your PR description.
 See the "Open questions" section of the SDK README. At the time of writing these are:
 
 - removing the per-orchestrator `[Function]` registration boilerplate,
-- adding missing primitives: `ForEach` fan-out, timers and external events, per-step compensation.
+- adding missing primitives: `ForEach` fan-out, external events, per-step compensation,
+- polling follow-ups: ready-made HTTP `202` start and check activities, polling progress in the custom status, and
+  `ContinueAsNew`-based polling for polls that need more than `Steps.MaxPollingChecks` checks.
 
 Also not yet done: an automated check that rejects primary constructors, and running the example in the real Functions host.

@@ -1,6 +1,5 @@
 using DurableFunctionOrchestrator.Sdk.Internal;
 using Microsoft.DurableTask;
-using Microsoft.Extensions.Logging;
 
 namespace DurableFunctionOrchestrator.Sdk;
 
@@ -67,49 +66,13 @@ public abstract class ActivityOrchestrator<TInput, TOutput> : TaskOrchestrator<T
 
     var builder = new OrchestrationPipelineBuilder<TInput>();
     ConfigurePipeline(builder);
-    IReadOnlyList<IPipelineStage<TInput>> stages = builder.Build();
 
-    ILogger logger = context.CreateReplaySafeLogger(GetType().Name);
-    var state = new OrchestrationState<TInput>(input, context.InstanceId);
-    var runtime = new PipelineRuntime<TInput>(context, state, DefaultTaskOptions, logger);
-
-    logger.LogInformation("Orchestration {InstanceId} starting pipeline with {StageCount} stage(s).", context.InstanceId, stages.Count);
-
-    try
-    {
-      for (int i = 0; i < stages.Count && !state.IsStopped; i++)
-      {
-        ReportProgress(context, state, OrchestrationRunStatus.Running, i + 1, stages.Count, stages[i].Description);
-        await stages[i].ExecuteAsync(runtime);
-      }
-    }
-    catch (StepFailedException failure)
-    {
-      logger.LogError(failure, "Orchestration {InstanceId} failed at step '{StepName}'.", context.InstanceId, failure.Step.Name);
-      ReportProgress(context, state, OrchestrationRunStatus.Failed, null, stages.Count, failure.Step.Name);
-      return await OnStepFailedAsync(context, state, failure);
-    }
-
-    OrchestrationRunStatus finalStatus = state.IsStopped ? OrchestrationRunStatus.Stopped : OrchestrationRunStatus.Completed;
-    ReportProgress(context, state, finalStatus, null, stages.Count, state.StopReason);
-    logger.LogInformation("Orchestration {InstanceId} finished with status {Status}.", context.InstanceId, finalStatus);
-
-    return BuildOutput(state);
+    var runner = new PipelineRunner<TInput>(builder.Build(), DefaultTaskOptions);
+    return await runner.RunAsync(
+      context,
+      input,
+      context.CreateReplaySafeLogger(GetType().Name),
+      BuildOutput,
+      (state, failure) => OnStepFailedAsync(context, state, failure));
   }
-
-  private static void ReportProgress(
-    TaskOrchestrationContext context,
-    OrchestrationState<TInput> state,
-    OrchestrationRunStatus status,
-    int? currentStage,
-    int totalStages,
-    string? detail) =>
-    context.SetCustomStatus(new OrchestrationProgress(
-      status.ToString(),
-      currentStage,
-      totalStages,
-      detail,
-      state.CompletedSteps.Select(step => step.Name).ToArray(),
-      state.SkippedSteps.Select(step => step.Name).ToArray(),
-      state.Failures.Keys.Select(step => step.Name).ToArray()));
 }

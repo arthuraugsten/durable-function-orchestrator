@@ -51,3 +51,9 @@ dotnet_naming_rule.private_static_fields_pascal_case.severity = warning
 dotnet_naming_rule.private_fields_underscore_camel_case.symbols = private_fields
 dotnet_naming_rule.private_fields_underscore_camel_case.style = underscore_camel_case
 dotnet_naming_rule.private_fields_underscore_camel_case.severity = warning
+
+# The SDK and its tests use folders for organisation only. Public types stay in the
+# DurableFunctionOrchestrator.Sdk namespace (internal types in ...Sdk.Internal), so consumers need
+# a single using. This turns off IDE0130 "Namespace does not match folder structure".
+[{src/DurableFunctionOrchestrator.Sdk/**.cs,tests/DurableFunctionOrchestrator.Sdk.Tests/**.cs}]
+dotnet_style_namespace_match_folder = false

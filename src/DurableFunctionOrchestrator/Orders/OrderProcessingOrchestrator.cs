@@ -44,8 +44,13 @@ public sealed class OrderProcessingOrchestrator : ActivityOrchestrator<OrderRequ
       // 4. Charge the customer, using results from earlier steps.
       .Step(Payment, state => new PaymentRequest(state.Input.OrderId, state.Input.Subtotal + state.GetResult(Shipping).Cost))
 
-      // 5. Ship it: a whole pipeline of its own, run as a sub-orchestration.
-      .Step(Fulfillment, state => new FulfillmentRequest(state.Input.OrderId, state.GetResult(Reservation).ReservationId))
+      // 5. Ship it: a whole pipeline of its own, run as a sub-orchestration. It polls the carrier's
+      //    HTTP API for a shipping label. It is not retried as a whole: its own steps retry, and
+      //    re-running it would create a second shipment.
+      .Step(
+        Fulfillment,
+        state => new FulfillmentRequest(state.Input.OrderId, state.GetResult(Reservation).ReservationId, [.. state.Input.Lines.Select(line => line.Sku)]),
+        step => step.WithOptions(new TaskOptions(retry: null)))
 
       // 6. Non-critical follow-ups: run concurrently, and never fail the order.
       .Parallel(parallel => parallel
@@ -78,19 +83,24 @@ public sealed class OrderProcessingOrchestrator : ActivityOrchestrator<OrderRequ
       Notes: [.. state.Failures.Select(f => $"{f.Key.Name} failed: {f.Value.ErrorMessage}")]);
   }
 
-  // Compensation (saga): if payment fails, release the stock reserved earlier and return a
-  // business result instead of failing the orchestration. Other failures use the default (rethrow).
+  // Compensation (saga): if payment or fulfillment fails, undo the work already done, newest first
+  // (refund the payment, release the stock), and return a business result instead of failing the
+  // orchestration. Other failures use the default (rethrow).
   protected override async Task<OrderResult> OnStepFailedAsync(
     TaskOrchestrationContext context,
     OrchestrationState<OrderRequest> state,
     StepFailedException failure)
   {
-    if (failure.Step != Payment)
+    if (failure.Step != Payment && failure.Step != Fulfillment)
       return await base.OnStepFailedAsync(context, state, failure);
+
+    if (state.TryGetResult(Payment, out PaymentReceipt? receipt))
+      await context.CallActivityAsync(RefundPayment, receipt);
 
     if (state.TryGetResult(Reservation, out InventoryReservation? reservation))
       await context.CallActivityAsync(ReleaseInventory, reservation.ReservationId);
 
-    return new OrderResult(state.Input.OrderId, OrderStatus.PaymentFailed, Notes: [failure.FailureDetails.ErrorMessage]);
+    string status = failure.Step == Payment ? OrderStatus.PaymentFailed : OrderStatus.FulfillmentFailed;
+    return new OrderResult(state.Input.OrderId, status, Notes: [failure.FailureDetails.ErrorMessage]);
   }
 }

@@ -11,10 +11,13 @@ public static class OrderActivityNames
   public const string CalculateShipping = nameof(CalculateShipping);
   public const string ProcessPayment = nameof(ProcessPayment);
   public const string ReleaseInventory = nameof(ReleaseInventory);
+  public const string RefundPayment = nameof(RefundPayment);
   public const string SendConfirmation = nameof(SendConfirmation);
   public const string AwardLoyaltyPoints = nameof(AwardLoyaltyPoints);
   public const string CreateShipment = nameof(CreateShipment);
   public const string SchedulePickup = nameof(SchedulePickup);
+  public const string RequestShippingLabel = nameof(RequestShippingLabel);
+  public const string CheckShippingLabel = nameof(CheckShippingLabel);
 }
 
 /// <summary>
@@ -91,6 +94,11 @@ public static class OrderActivities
     context.GetLogger(OrderActivityNames.ReleaseInventory)
       .LogInformation("Released inventory reservation {ReservationId}.", reservationId);
 
+  [Function(OrderActivityNames.RefundPayment)]
+  public static void RefundPayment([ActivityTrigger] PaymentReceipt receipt, FunctionContext context) =>
+    context.GetLogger(OrderActivityNames.RefundPayment)
+      .LogInformation("Refunded {Amount} for transaction {TransactionId}.", receipt.AmountCharged, receipt.TransactionId);
+
   [Function(OrderActivityNames.SendConfirmation)]
   public static void SendConfirmation([ActivityTrigger] ConfirmationRequest request, FunctionContext context)
   {
@@ -106,7 +114,7 @@ public static class OrderActivities
   public static int AwardLoyaltyPoints([ActivityTrigger] LoyaltyRequest request) => (int)Math.Floor(request.AmountSpent);
 
   [Function(OrderActivityNames.CreateShipment)]
-  public static Shipment CreateShipment([ActivityTrigger] FulfillmentRequest request) => new($"SHP-{request.OrderId}", $"TRK{Random.Shared.Next(100_000_000, 999_999_999)}");
+  public static Shipment CreateShipment([ActivityTrigger] FulfillmentRequest request) => new($"SHP-{request.OrderId}");
 
   [Function(OrderActivityNames.SchedulePickup)]
   public static void SchedulePickup([ActivityTrigger] Shipment shipment, FunctionContext context) =>

@@ -19,11 +19,3 @@ public sealed record OrchestrationProgress(
   IReadOnlyList<string> CompletedSteps,
   IReadOnlyList<string> SkippedSteps,
   IReadOnlyList<string> FailedSteps);
-
-internal enum OrchestrationRunStatus
-{
-  Running,
-  Completed,
-  Stopped,
-  Failed,
-}

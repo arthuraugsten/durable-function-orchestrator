@@ -9,7 +9,8 @@ internal sealed record TaskCall(StepKind Kind, string Name, object? Input, TaskO
 /// <summary>
 /// In-memory orchestration context. Activities and sub-orchestrations are resolved from registered
 /// handlers; an exception thrown by a handler surfaces as a <see cref="TaskFailedException"/>, just
-/// like a failed task in the real runtime. Retries and replay are not simulated.
+/// like a failed task in the real runtime. Durable timers complete immediately and move
+/// <see cref="CurrentUtcDateTime"/> forward to their fire time. Retries and replay are not simulated.
 /// </summary>
 internal sealed class FakeOrchestrationContext : TaskOrchestrationContext
 {
@@ -17,6 +18,8 @@ internal sealed class FakeOrchestrationContext : TaskOrchestrationContext
   private readonly Dictionary<string, Func<object?, object?>> _handlers = new(StringComparer.Ordinal);
   private readonly List<TaskCall> _calls = [];
   private readonly List<object?> _statusHistory = [];
+  private readonly List<DateTime> _timers = [];
+  private DateTime _currentUtcDateTime = Start;
 
   public FakeOrchestrationContext(object? input = null)
   {
@@ -28,13 +31,26 @@ internal sealed class FakeOrchestrationContext : TaskOrchestrationContext
     get
     {
       lock (_calls)
-        return _calls.ToArray();
+        return [.. _calls];
     }
   }
+
+  /// <summary>The clock at the start of every test.</summary>
+  public static DateTime Start { get; } = new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
   public IReadOnlyList<string> CallNames => Calls.Select(call => call.Name).ToArray();
 
   public IReadOnlyList<OrchestrationProgress> StatusHistory => _statusHistory.Cast<OrchestrationProgress>().ToArray();
+
+  /// <summary>Fire times of the durable timers created, in seconds after <see cref="Start"/>.</summary>
+  public IReadOnlyList<double> TimerSeconds
+  {
+    get
+    {
+      lock (_timers)
+        return _timers.Select(fireAt => (fireAt - Start).TotalSeconds).ToArray();
+    }
+  }
 
   public override TaskName Name => "TestOrchestration";
 
@@ -42,7 +58,14 @@ internal sealed class FakeOrchestrationContext : TaskOrchestrationContext
 
   public override ParentOrchestrationInstance? Parent => null;
 
-  public override DateTime CurrentUtcDateTime => new(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+  public override DateTime CurrentUtcDateTime
+  {
+    get
+    {
+      lock (_timers)
+        return _currentUtcDateTime;
+    }
+  }
 
   public override bool IsReplaying => false;
 
@@ -72,7 +95,17 @@ internal sealed class FakeOrchestrationContext : TaskOrchestrationContext
 
   public override void SetCustomStatus(object? customStatus) => _statusHistory.Add(customStatus);
 
-  public override Task CreateTimer(DateTime fireAt, CancellationToken cancellationToken) => throw new NotSupportedException();
+  public override async Task CreateTimer(DateTime fireAt, CancellationToken cancellationToken)
+  {
+    await Task.Yield();
+
+    lock (_timers)
+    {
+      _timers.Add(fireAt);
+      if (fireAt > _currentUtcDateTime)
+        _currentUtcDateTime = fireAt;
+    }
+  }
 
   public override Task<T> WaitForExternalEvent<T>(string eventName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
