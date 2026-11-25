@@ -65,7 +65,7 @@ To run the example app: start Azurite, then run `func start` in `src/DurableFunc
 
 - **2-space indentation everywhere**, including continuation lines: wrapped parameters, chained calls and ternaries are
   indented +2, not +4. `dotnet format` fixes block indentation but not continuation offsets, so check those by hand.
-- **CRLF line endings**, UTF-8, final newline, file-scoped namespaces, braces on new lines.
+- **LF line endings** (enforced by `.gitattributes`), UTF-8, final newline, file-scoped namespaces, braces on new lines.
 - **No primary constructors** on classes or structs. Use a standard constructor that assigns `private readonly` fields.
   Positional `record`s are fine. (`.editorconfig` can only disable the IDE suggestion, so reviewers enforce this.)
 - **Private instance fields are `_camelCase`** (`_steps = steps;`). Never use `this.` to access fields.
