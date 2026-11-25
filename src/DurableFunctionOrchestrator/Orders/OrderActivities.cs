@@ -18,6 +18,7 @@ public static class OrderActivityNames
   public const string SchedulePickup = nameof(SchedulePickup);
   public const string RequestShippingLabel = nameof(RequestShippingLabel);
   public const string CheckShippingLabel = nameof(CheckShippingLabel);
+  public const string SyncCarrierRates = nameof(SyncCarrierRates);
 }
 
 /// <summary>
@@ -36,6 +37,9 @@ public static class OrderActivities
   public const decimal PaymentLimit = 10_000m;
   public const string OutOfStockSkuPrefix = "OUT-OF-STOCK";
   public const string BouncingEmailDomain = "@bounce.test";
+
+  /// <summary>The longest simulated rate sync, in seconds.</summary>
+  public const int MaxRateSyncSeconds = 120;
 
   [Function(OrderActivityNames.ValidateOrder)]
   public static ValidationResult ValidateOrder([ActivityTrigger] OrderRequest order)
@@ -108,6 +112,19 @@ public static class OrderActivities
 
     context.GetLogger(OrderActivityNames.SendConfirmation)
       .LogInformation("Sent confirmation for order {OrderId} to {Email}.", request.OrderId, request.CustomerEmail);
+  }
+
+  /// <summary>Simulates a slow refresh of carrier rates, so a second run can be started while it works.</summary>
+  [Function(OrderActivityNames.SyncCarrierRates)]
+  public static async Task<int> SyncCarrierRates([ActivityTrigger] RateSyncRequest request, FunctionContext context, CancellationToken cancellationToken)
+  {
+    int seconds = Math.Clamp(request.DurationSeconds, 1, MaxRateSyncSeconds);
+    await Task.Delay(TimeSpan.FromSeconds(seconds), cancellationToken);
+
+    const int ratesUpdated = 42;
+    context.GetLogger(OrderActivityNames.SyncCarrierRates)
+      .LogInformation("Refreshed {RateCount} carrier rates in {Seconds}s.", ratesUpdated, seconds);
+    return ratesUpdated;
   }
 
   [Function(OrderActivityNames.AwardLoyaltyPoints)]

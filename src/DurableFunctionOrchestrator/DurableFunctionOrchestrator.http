@@ -19,6 +19,10 @@
 # takes ~6s to complete; while it polls, customStatus.detail is "FulfillmentOrchestrator".
 #   - SKU starting with "OVERSIZED"       -> the carrier rejects the label: payment refunded, inventory released
 #   - SKU starting with "SLOW-SHIP"       -> the label is never ready in time: polling times out after 20s
+#
+# Scenarios 10 and 11 show run leases: CarrierRateSyncOrchestrator allows only one run at a time. Its 10-minute lease is
+# renewed every 200s while the sync runs: send { "durationSeconds": 120 } and the host log shows no renewal; the
+# lease simply outlasts it. The demo uses the in-memory fake repository, so the lease is shared only within this host.
 
 @baseUrl = http://localhost:7071
 
@@ -188,6 +192,32 @@ Content-Type: application/json
     { "sku": "KEYBOARD-01", "quantity": 1, "unitPrice": 49.99 }
   ]
 }
+
+
+### 🔒 10. Run lease: start a carrier rate sync (takes 20s and holds the lease while it runs)
+# Expected: runtimeStatus "Completed", output.status "Completed", output.ratesUpdated 42.
+# The host log shows "acquired the run lease" and, at the end, "released the run lease as Completed".
+# @name rateSync
+POST {{baseUrl}}/api/jobs/carrier-rate-sync
+Content-Type: application/json
+
+{
+  "durationSeconds": 20
+}
+
+### 🔒 10. Status
+GET {{rateSync.response.body.$.statusQueryGetUri}}
+
+
+### 🔒 11. Run lease: start a second sync while the first is running (within 20s of request 10)
+# Expected: completes at once without running the sync. runtimeStatus "Completed", output.status "AlreadyRunning",
+# output.runningInstanceId is the instance ID of request 10, customStatus.status "Rejected".
+# Send it again after request 10 completes: this time it acquires the lease and runs.
+# @name rateSyncAgain
+POST {{baseUrl}}/api/jobs/carrier-rate-sync
+
+### 🔒 11. Status
+GET {{rateSyncAgain.response.body.$.statusQueryGetUri}}
 
 
 ### 🔎 Call the simulated carrier API directly: 202 Accepted with a Location header

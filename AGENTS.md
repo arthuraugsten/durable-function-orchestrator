@@ -11,7 +11,7 @@ A **pilot** for adding pipeline orchestration to an SDK. It has three projects:
 | `src/DurableFunctionOrchestrator.Sdk` | **The SDK.** `ActivityOrchestrator<TInput, TOutput>`: a base class for Durable Task orchestrators that run a pipeline of activities and sub-orchestrations. Concrete classes declare *which* steps run; the base class handles *how* (sequencing, fan-out/fan-in, conditions, retries, polling of long-running operations, early exit, progress, failure handling). |
 | `src/DurableFunctionOrchestrator` | **Example Azure Functions app** (isolated worker) that uses the SDK: an order pipeline (`Orders/`) with a fulfillment sub-orchestration that polls a simulated asynchronous carrier HTTP API, compensation and an HTTP starter. |
 | `tests/DurableFunctionOrchestrator.Sdk.Tests` | **SDK unit tests** (xUnit v3), run against a fake `TaskOrchestrationContext`. |
-| `docs/` | **Contributor docs.** [`sdk-dependency-map.html`](docs/sdk-dependency-map.html) is an interactive map of every SDK class and the example app classes that use it, with each class's dependency tree. Open it in a browser. |
+| `docs/` | **Contributor docs.** [`sdk-dependency-map.html`](docs/sdk-dependency-map.html) is an interactive map of every SDK class and the example app classes that use it, with each class's dependency tree. [`run-lease-renewal.html`](docs/run-lease-renewal.html) steps through how run leases are acquired, renewed and released, with a sequence diagram for each workflow. Open them in a browser. |
 
 The SDK's user-facing documentation is [`src/DurableFunctionOrchestrator.Sdk/README.md`](src/DurableFunctionOrchestrator.Sdk/README.md). It is also the NuGet package readme. Read it to understand the public API.
 
@@ -95,9 +95,10 @@ one type. **Namespaces are flat:** public types are in `DurableFunctionOrchestra
 | `Pipeline/` | public | Declaring a pipeline: `OrchestrationPipelineBuilder`, `ParallelStageBuilder`, `StepOptions`. |
 | `Polling/` | public | What polling check steps return: `PollStatus`, `PollState`, `PollingErrorTypes`. |
 | `Results/` | public | What you read: `OrchestrationState`, `OrchestrationProgress`, `StepFailedException`. |
+| `Concurrency/` | public | Run leases that prevent concurrent runs: `RunLeaseOptions`, `IOrchestrationRunRepository` and its in-memory fake, `RunLeaseService` (runs inside activities), `RunLeaseLostException`, the record and activity payloads. |
 | `Internal/Definitions/` | internal | The declared pipeline as data, with no behaviour: `IPipelineStage`, `PipelineStep`, `PollingDefinition`, `StepOutcome`. |
 | `Internal/Building/` | internal | Validation when handles and pipelines are declared: `StepFactory` (unique names), `PollingValidator`. |
-| `Internal/Execution/` | internal | **All run logic**, everything that calls Durable Task: `PipelineRunner` (stage loop, progress), `StepStage` / `StopStage`, `StepInvoker` (activity and sub-orchestration calls), `PollingRunner`, `PollingSchedule`. |
+| `Internal/Execution/` | internal | **All run logic**, everything that calls Durable Task: `PipelineRunner` (stage loop, progress), `StepStage` / `StopStage`, `StepInvoker` (activity and sub-orchestration calls), `PollingRunner`, `PollingSchedule`, `RunLeaseGuard` (acquire and release), `RunLeaseKeeper` (renews the lease on a durable timer while each stage runs). |
 
 **Logging in the SDK goes through `Internal/Execution/SdkLog`**, generated at compile time with `[LoggerMessage]`.
 Orchestrator code replays on every wake-up, so plain `logger.LogInformation(...)` calls would allocate an argument array
@@ -147,7 +148,7 @@ These keep the SDK correct and consistent. Breaking them usually causes bugs tha
 6. **Keep the public API small.** Public types live in the `DurableFunctionOrchestrator.Sdk` namespace. Implementation types go in
    `Orchestrator/Internal/` and are `internal` (see [SDK layout](#sdk-layout)). Every public member needs XML docs (`GenerateDocumentationFile` is on).
 7. **The base class owns execution.** `RunAsync` is `sealed`; extension points are `ConfigurePipeline`,
-   `BuildOutput`, `DefaultTaskOptions` and `OnStepFailedAsync`. Add new behaviour as pipeline primitives or step options,
+   `BuildOutput`, `DefaultTaskOptions`, `OnStepFailedAsync`, `RunLease` and `OnConcurrentRunRejectedAsync`. Add new behaviour as pipeline primitives or step options,
    not by opening up `RunAsync`.
 
 ### Adding a pipeline feature (e.g. a new stage type or step option)
@@ -184,6 +185,10 @@ Call out the break in your PR description.
     is the final `OrchestrationState`, so tests can assert on results, skips and failures directly.
 - The fake's **durable timers complete at once** and move `CurrentUtcDateTime` forward to their fire time. `TimerSeconds`
   lists them, in seconds after `FakeOrchestrationContext.Start`. Use it to test polling intervals and timeouts.
+- **Virtual time:** run the orchestration with `context.Run(() => orchestrator.RunAsync(context, input))` to test anything
+  that races tasks against timers, such as run-lease renewal. It runs on one thread like the real runtime, fires timers
+  in order, lets activities take time (`.Takes(name, duration)`), and records when each call started (`CallSeconds`).
+  `OrchestrationTimeProvider` gives activity code (such as `RunLeaseService`) the same clock.
 - The fake **does not simulate retries or replay**. Test retry configuration by checking the `TaskOptions` passed to each call
   (see `Default_task_options_apply_unless_a_step_overrides_them`). Behaviour that depends on replay needs a real host.
 - Test names describe behaviour in sentence form: `Parallel_failure_is_raised_after_every_branch_finishes_...`.
@@ -211,6 +216,10 @@ Call out the break in your PR description.
   to `OrderJsonContext`, and every carrier HTTP body to `CarrierJsonContext`. A type that's missing still works
   through the reflection fallback, only more slowly. Computed properties get `[JsonIgnore]`, so they aren't stored
   in the orchestration history.
+- **Run leases.** `CarrierRateSyncOrchestrator` sets `RunLease`, so only one rate sync runs at a time. The three lease
+  activities (acquire, renew, release) are registered once, in `OrchestrationRunActivities`, and forward to the `RunLeaseService` registered in
+  `Program.cs`. The repository there is `InMemoryOrchestrationRunRepository`, a fake that works within one host only.
+  For production, implement `IOrchestrationRunRepository` over a shared, strongly consistent database.
 - **Activities that need services** (such as `IHttpClientFactory`) live in a non-static class with a standard
   constructor, like `CarrierActivities`. Simple activities stay `static`.
 - [`DurableFunctionOrchestrator.http`](src/DurableFunctionOrchestrator/DurableFunctionOrchestrator.http) has a demo request
@@ -222,6 +231,8 @@ See the "Open questions" section of the SDK README. At the time of writing these
 
 - removing the per-orchestrator `[Function]` registration boilerplate,
 - adding missing primitives: `ForEach` fan-out, external events, per-step compensation,
+- run-lease follow-ups: a database repository, a configurable key (today it is the orchestrator name), and waiting for
+  the lease instead of rejecting,
 - polling follow-ups: ready-made HTTP `202` start and check activities, polling progress in the custom status, and
   `ContinueAsNew`-based polling for polls that need more than `Steps.MaxPollingChecks` checks.
 

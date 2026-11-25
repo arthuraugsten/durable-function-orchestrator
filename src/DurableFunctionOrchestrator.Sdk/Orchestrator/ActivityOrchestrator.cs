@@ -33,6 +33,14 @@ public abstract class ActivityOrchestrator<TInput, TOutput> : TaskOrchestrator<T
   /// </summary>
   protected virtual TaskOptions? DefaultTaskOptions => null;
 
+  /// <summary>
+  /// Return <see cref="RunLeaseOptions"/> to prevent concurrent runs of this orchestrator across every
+  /// instance and region: a run first acquires a lease keyed by the orchestrator name, and is rejected
+  /// (see <see cref="OnConcurrentRunRejectedAsync"/>) while another run holds it. The default, null,
+  /// allows concurrent runs.
+  /// </summary>
+  protected virtual RunLeaseOptions? RunLease => null;
+
   /// <summary>Declares the steps this orchestration runs.</summary>
   protected abstract void ConfigurePipeline(OrchestrationPipelineBuilder<TInput> pipeline);
 
@@ -52,6 +60,17 @@ public abstract class ActivityOrchestrator<TInput, TOutput> : TaskOrchestrator<T
     OrchestrationState<TInput> state,
     StepFailedException failure) => Task.FromException<TOutput>(failure);
 
+  /// <summary>
+  /// Called instead of running the pipeline when <see cref="RunLease"/> is set and another run of this
+  /// orchestrator holds the lease. <paramref name="current"/> is that run's record. Override to return an
+  /// output (for example "already running") instead of failing; the default throws a
+  /// <see cref="ConcurrentRunRejectedException"/>, failing the orchestration.
+  /// </summary>
+  protected virtual Task<TOutput> OnConcurrentRunRejectedAsync(
+    TaskOrchestrationContext context,
+    OrchestrationState<TInput> state,
+    OrchestrationRunRecord current) => Task.FromException<TOutput>(new ConcurrentRunRejectedException(current));
+
   /// <summary>Reads the orchestration input from <paramref name="context"/> and runs the pipeline.</summary>
   protected Task<TOutput> ExecuteAsync(TaskOrchestrationContext context)
   {
@@ -67,12 +86,13 @@ public abstract class ActivityOrchestrator<TInput, TOutput> : TaskOrchestrator<T
     var builder = new OrchestrationPipelineBuilder<TInput>();
     ConfigurePipeline(builder);
 
-    var runner = new PipelineRunner<TInput>(builder.Build(), DefaultTaskOptions);
+    var runner = new PipelineRunner<TInput>(builder.Build(), DefaultTaskOptions, RunLease);
     return await runner.RunAsync(
       context,
       input,
       context.CreateReplaySafeLogger(GetType().Name),
       BuildOutput,
-      (state, failure) => OnStepFailedAsync(context, state, failure));
+      (state, failure) => OnStepFailedAsync(context, state, failure),
+      (state, current) => OnConcurrentRunRejectedAsync(context, state, current));
   }
 }

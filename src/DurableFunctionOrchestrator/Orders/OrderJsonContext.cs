@@ -31,6 +31,12 @@ namespace DurableFunctionOrchestrator.Orders;
 [JsonSerializable(typeof(ShippingLabel))]
 [JsonSerializable(typeof(PollStatus<ShippingLabel>))]
 [JsonSerializable(typeof(OrchestrationProgress))]
+[JsonSerializable(typeof(RateSyncRequest))]
+[JsonSerializable(typeof(RateSyncResult))]
+[JsonSerializable(typeof(RunLeaseRequest))]
+[JsonSerializable(typeof(RunLeaseResult))]
+[JsonSerializable(typeof(RunLeaseRelease))]
+[JsonSerializable(typeof(OrchestrationRunRecord))]
 internal sealed partial class OrderJsonContext : JsonSerializerContext
 {
   /// <summary>

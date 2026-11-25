@@ -58,6 +58,23 @@ public sealed record OrderResult(
   int? LoyaltyPointsAwarded = null,
   IReadOnlyList<string>? Notes = null);
 
+/// <summary>Input of the carrier rate sync job.</summary>
+/// <param name="DurationSeconds">How long the simulated sync takes, so a concurrent start can be demonstrated.</param>
+public sealed record RateSyncRequest(int DurationSeconds = 15);
+
+/// <summary>Output of the carrier rate sync job: what it did, or which run it found already running.</summary>
+public sealed record RateSyncResult(
+  string Status,
+  int? RatesUpdated = null,
+  string? RunningInstanceId = null,
+  DateTimeOffset? RunningSince = null);
+
+public static class RateSyncStatus
+{
+  public const string Completed = nameof(Completed);
+  public const string AlreadyRunning = nameof(AlreadyRunning);
+}
+
 public static class OrderStatus
 {
   public const string Completed = nameof(Completed);

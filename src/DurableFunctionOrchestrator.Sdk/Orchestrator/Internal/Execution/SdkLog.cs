@@ -38,4 +38,25 @@ internal static partial class SdkLog
 
   [LoggerMessage(EventId = 9, Level = LogLevel.Information, Message = "Polling step '{StepName}': still pending after check {CheckCount}; next check in {WaitSeconds}s.")]
   public static partial void PollingPending(ILogger logger, string stepName, int checkCount, int waitSeconds);
+
+  [LoggerMessage(EventId = 10, Level = LogLevel.Information, Message = "Orchestrator '{OrchestratorName}': instance {InstanceId} acquired the run lease (until {LeaseExpiresAt:O}).")]
+  public static partial void RunLeaseAcquired(ILogger logger, string orchestratorName, string instanceId, DateTimeOffset leaseExpiresAt);
+
+  [LoggerMessage(EventId = 11, Level = LogLevel.Warning, Message = "Orchestrator '{OrchestratorName}': instance {InstanceId} was rejected because instance {HolderInstanceId} holds the run lease.")]
+  public static partial void RunLeaseRejected(ILogger logger, string orchestratorName, string instanceId, string holderInstanceId);
+
+  [LoggerMessage(EventId = 12, Level = LogLevel.Information, Message = "Orchestrator '{OrchestratorName}': instance {InstanceId} released the run lease as {Status}.")]
+  public static partial void RunLeaseReleased(ILogger logger, string orchestratorName, string instanceId, RunStatus status);
+
+  [LoggerMessage(EventId = 13, Level = LogLevel.Warning, Message = "Orchestrator '{OrchestratorName}': instance {InstanceId} could not release the run lease, which will expire on its own: {Error}")]
+  public static partial void RunLeaseReleaseFailed(ILogger logger, string orchestratorName, string instanceId, string error);
+
+  [LoggerMessage(EventId = 14, Level = LogLevel.Debug, Message = "Orchestrator '{OrchestratorName}': instance {InstanceId} renewed the run lease.")]
+  public static partial void RunLeaseRenewed(ILogger logger, string orchestratorName, string instanceId);
+
+  [LoggerMessage(EventId = 15, Level = LogLevel.Warning, Message = "Orchestrator '{OrchestratorName}': instance {InstanceId} could not renew the run lease: {Error}")]
+  public static partial void RunLeaseRenewalFailed(ILogger logger, string orchestratorName, string instanceId, string error);
+
+  [LoggerMessage(EventId = 16, Level = LogLevel.Error, Message = "Orchestrator '{OrchestratorName}': instance {InstanceId} lost the run lease to instance {HolderInstanceId} and stops.")]
+  public static partial void RunLeaseLost(ILogger logger, string orchestratorName, string instanceId, string? holderInstanceId);
 }

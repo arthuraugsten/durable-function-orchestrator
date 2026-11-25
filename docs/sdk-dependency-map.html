@@ -215,8 +215,8 @@
     <section class="panel notes" aria-labelledby="notes-title">
       <h2 id="notes-title">What the map shows</h2>
       <div class="note">
-        <h3>Durable Task is called from three classes</h3>
-        <p><code>PipelineRunner</code> publishes the custom status, <code>StepInvoker</code> calls activities and sub-orchestrations, and <code>PollingRunner</code> creates timers and reads the clock. <span class="muted"><code>ActivityOrchestrator</code> only reads the input and creates the replay-safe logger.</span></p>
+        <h3>Durable Task is called from five classes</h3>
+        <p><code>PipelineRunner</code> publishes the custom status, <code>StepInvoker</code> calls activities and sub-orchestrations, <code>PollingRunner</code> creates timers and reads the clock, <code>RunLeaseGuard</code> acquires and releases the run lease, and <code>RunLeaseKeeper</code> renews it on a durable timer while each stage runs. <span class="muted"><code>ActivityOrchestrator</code> only reads the input and creates the replay-safe logger.</span></p>
       </div>
       <div class="note">
         <h3>Four arrows point back up by design</h3>
@@ -225,6 +225,10 @@
       <div class="note">
         <h3>Definitions reach into Execution twice</h3>
         <p><code>IPipelineStage</code> takes a <code>PipelineRuntime</code>, and <code>PollingDefinition</code> holds a <code>PollingSchedule</code>, both of which live in <code>Internal/Execution</code>. Moving those two records into <code>Internal/Definitions</code> would make every arrow between the internal folders point one way. <span class="muted">Not changed yet.</span></p>
+      </div>
+      <div class="note">
+        <h3>The repository is reached only from activities</h3>
+        <p>No orchestration-side class references <code>RunLeaseService</code> or <code>IOrchestrationRunRepository</code>. <code>RunLeaseGuard</code> and <code>RunLeaseKeeper</code> send <code>RunLeaseRequest</code> and <code>RunLeaseRelease</code> to activities, and only the app's <code>OrchestrationRunActivities</code> calls the service, because orchestration code replays and must not do I/O.</p>
       </div>
       <div class="note">
         <h3 id="app-note-title">The example app</h3>
@@ -243,6 +247,7 @@
     { label: "Internal · Execution", sub: "all run logic", color: "execution" },
     { label: "Internal · Definitions", sub: "the declared pipeline", color: "definitions" },
     { label: "Public types", sub: "handles, state, results", color: "public" },
+    { label: "Run leases", sub: "Concurrency/ · one run at a time", color: "public" },
   ];
 
   const NODES = [
@@ -250,6 +255,8 @@
     { id: "OrderProcessingOrchestrator", col: 0, kind: "sealed class", folder: "Orders/", vis: "app", role: "The example order pipeline: validate, reserve stock and quote shipping, charge, fulfil, notify. Compensates payment and fulfilment failures." },
     { id: "FulfillmentOrchestrator", col: 0, kind: "sealed class", folder: "Orders/", vis: "app", role: "Sub-orchestration: creates the shipment, polls the carrier's HTTP API for a label, schedules pickup." },
     { id: "CarrierActivities", col: 0, kind: "sealed class", folder: "Orders/", vis: "app", role: "The start and check activities of the label polling step. They send the HTTP requests and map responses to PollStatus." },
+    { id: "CarrierRateSyncOrchestrator", col: 0, kind: "sealed class", folder: "Orders/", vis: "app", role: "A job that must never overlap: sets RunLease, so a second run anywhere is rejected and returns AlreadyRunning." },
+    { id: "OrchestrationRunActivities", col: 0, kind: "sealed class", folder: "Orders/", vis: "app", role: "The three run-lease activities (acquire, renew, release), registered once for the app. They forward to RunLeaseService, the only code that touches the repository." },
     { id: "OrderJsonContext", col: 0, kind: "partial class", folder: "Orders/", vis: "app", role: "Source-generated JSON metadata for every payload that passes through Durable Task." },
     // Public API
     { id: "ActivityOrchestrator", col: 1, kind: "abstract class", folder: "Orchestrator/", vis: "public", dtNote: true, role: "The base class. RunAsync builds the pipeline from ConfigurePipeline and hands it to PipelineRunner." },
@@ -267,6 +274,8 @@
     { id: "PollingRunner", col: 3, kind: "static class", folder: "Internal/Execution/", vis: "internal", dt: true, role: "The polling loop: start, durable timer, check, until the operation completes, fails or times out." },
     { id: "PollingSchedule", col: 3, kind: "sealed record", folder: "Internal/Execution/", vis: "internal", role: "Interval and backoff maths, shared by the runner and the budget check." },
     { id: "PipelineRuntime", col: 3, kind: "sealed record", folder: "Internal/Execution/", vis: "internal", role: "What a stage gets while it runs: the context, the state, default task options and the logger." },
+    { id: "RunLeaseGuard", col: 3, kind: "static class", folder: "Internal/Execution/", vis: "internal", dt: true, role: "Calls the acquire activity before the first stage and the release activity when the run ends, keyed by the orchestrator name." },
+    { id: "RunLeaseKeeper", col: 3, kind: "sealed class", folder: "Internal/Execution/", vis: "internal", dt: true, role: "Renews the lease while each stage runs: races the stage against a durable timer and calls the renew activity whenever the timer wins." },
     { id: "SdkLog", col: 3, kind: "static partial class", folder: "Internal/Execution/", vis: "internal", role: "The SDK's log messages, generated at compile time with [LoggerMessage]." },
     // Definitions
     { id: "OrchestrationRunStatus", col: 4, kind: "enum", folder: "Internal/Definitions/", vis: "internal", role: "Running, Completed, Stopped or Failed: the progress status values." },
@@ -285,6 +294,18 @@
     { id: "PollStatus", col: 5, kind: "sealed record<TResult>", folder: "Polling/", vis: "public", role: "What a polling check step returns: Pending, Completed with a result, or Failed." },
     { id: "PollState", col: 5, kind: "enum", folder: "Polling/", vis: "public", role: "Pending, Completed or Failed." },
     { id: "PollingErrorTypes", col: 5, kind: "static class", folder: "Polling/", vis: "public", role: "The error types of failures raised by polling itself: OperationFailed and TimedOut." },
+    // Run leases
+    { id: "RunLeaseOptions", col: 6, kind: "sealed record", folder: "Concurrency/", vis: "public", role: "What an orchestrator returns from RunLease: lease length, activity names and task options." },
+    { id: "RunLeaseService", col: 6, kind: "sealed class", folder: "Concurrency/", vis: "public", role: "Acquire and release logic, run inside the activities: conditional writes, retries on lost races, idempotent." },
+    { id: "IOrchestrationRunRepository", col: 6, kind: "interface", folder: "Concurrency/", vis: "public", role: "Stores one record per orchestrator name, with atomic insert-if-absent and replace-if-ETag-matches." },
+    { id: "InMemoryOrchestrationRunRepository", col: 6, kind: "sealed class", folder: "Concurrency/", vis: "public", role: "The fake repository for tests and local development. Works within one process only." },
+    { id: "OrchestrationRunRecord", col: 6, kind: "sealed record", folder: "Concurrency/", vis: "public", role: "The stored state: holder instance, status, lease expiry, how the last run ended, and the ETag." },
+    { id: "RunStatus", col: 6, kind: "enum", folder: "Concurrency/", vis: "public", role: "Running, Completed, Stopped or Failed." },
+    { id: "RunLeaseRequest", col: 6, kind: "sealed record", folder: "Concurrency/", vis: "public", role: "The acquire activity's input: orchestrator name, instance ID, lease length." },
+    { id: "RunLeaseResult", col: 6, kind: "sealed record", folder: "Concurrency/", vis: "public", role: "The acquire activity's output: whether the lease was acquired, and the holder's record." },
+    { id: "RunLeaseRelease", col: 6, kind: "sealed record", folder: "Concurrency/", vis: "public", role: "The release activity's input: which run ended, and how." },
+    { id: "RunLeaseLostException", col: 6, kind: "sealed class", folder: "Concurrency/", vis: "public", role: "Stops a run that lost its lease mid-pipeline: another run took it, or renewals failed until it could expire." },
+    { id: "ConcurrentRunRejectedException", col: 6, kind: "sealed class", folder: "Concurrency/", vis: "public", role: "Thrown by default when another run holds the lease. Carries the holder's record." },
   ];
 
   // From → to: "from" references "to" in code, ignoring comments and strings.
@@ -295,21 +316,25 @@
     OrderProcessingOrchestrator: ["FulfillmentOrchestrator", "ActivityOrchestrator", "Steps", "StepHandle", "OrchestrationPipelineBuilder", "OrchestrationState", "StepFailedException"],
     FulfillmentOrchestrator: ["ActivityOrchestrator", "Steps", "StepHandle", "OrchestrationPipelineBuilder", "OrchestrationState", "PollStatus"],
     CarrierActivities: ["PollStatus"],
-    OrderJsonContext: ["PollStatus", "OrchestrationProgress"],
-    ActivityOrchestrator: ["PipelineRunner", "OrchestrationPipelineBuilder", "OrchestrationState", "StepFailedException"],
+    CarrierRateSyncOrchestrator: ["ActivityOrchestrator", "Steps", "StepHandle", "RunLeaseOptions", "OrchestrationPipelineBuilder", "OrchestrationState", "OrchestrationRunRecord"],
+    OrchestrationRunActivities: ["RunLeaseService", "RunLeaseOptions", "RunLeaseResult", "RunLeaseRequest", "RunLeaseRelease"],
+    OrderJsonContext: ["PollStatus", "OrchestrationProgress", "RunLeaseRequest", "RunLeaseResult", "RunLeaseRelease", "OrchestrationRunRecord"],
+    ActivityOrchestrator: ["PipelineRunner", "OrchestrationPipelineBuilder", "OrchestrationState", "StepFailedException", "RunLeaseOptions", "OrchestrationRunRecord", "ConcurrentRunRejectedException"],
     OrchestrationPipelineBuilder: ["StepFactory", "IPipelineStage", "StepStage", "StopStage", "ParallelStageBuilder", "StepOptions", "OrchestrationState", "StepHandle"],
     ParallelStageBuilder: ["StepFactory", "PipelineStep", "StepOptions", "OrchestrationState", "StepHandle"],
     Steps: ["PollingValidator", "PollStatus", "StepHandle", "StepKind"],
     StepFactory: ["PipelineStep", "StepOptions", "OrchestrationState", "StepHandle"],
     PollingValidator: ["PollingDefinition", "PollingSchedule", "StepHandle", "StepKind", "Steps"],
-    PipelineRunner: ["IPipelineStage", "OrchestrationRunStatus", "PipelineRuntime", "SdkLog", "OrchestrationProgress", "OrchestrationState", "StepFailedException", "StepHandle"],
+    PipelineRunner: ["IPipelineStage", "OrchestrationRunStatus", "PipelineRuntime", "SdkLog", "OrchestrationProgress", "OrchestrationState", "StepFailedException", "StepHandle", "RunLeaseGuard", "RunLeaseKeeper", "RunLeaseLostException", "RunLeaseOptions", "RunLeaseResult", "OrchestrationRunRecord", "RunStatus"],
     StopStage: ["IPipelineStage", "PipelineRuntime", "SdkLog", "OrchestrationState"],
     StepStage: ["IPipelineStage", "PipelineStep", "StepOutcome", "StepOutcomeKind", "PipelineRuntime", "SdkLog", "StepFailedException", "StepHandle"],
     StepInvoker: ["PollingRunner", "StepHandle", "StepKind"],
     PollingRunner: ["PollingDefinition", "SdkLog", "PollState", "PollStatus", "PollingErrorTypes", "StepHandle", "Steps"],
     PollingSchedule: [],
     PipelineRuntime: ["OrchestrationState"],
-    SdkLog: ["OrchestrationRunStatus", "StepKind"],
+    RunLeaseKeeper: ["RunLeaseOptions", "RunLeaseRequest", "RunLeaseResult", "RunLeaseLostException", "SdkLog"],
+    RunLeaseGuard: ["RunLeaseOptions", "RunLeaseRequest", "RunLeaseResult", "RunLeaseRelease", "RunStatus", "SdkLog"],
+    SdkLog: ["OrchestrationRunStatus", "StepKind", "RunStatus"],
     OrchestrationRunStatus: [],
     IPipelineStage: ["PipelineRuntime"],
     PipelineStep: ["StepOptions", "OrchestrationState", "StepHandle"],
@@ -325,6 +350,17 @@
     PollStatus: ["PollState"],
     PollState: [],
     PollingErrorTypes: [],
+    RunLeaseOptions: [],
+    RunLeaseService: ["IOrchestrationRunRepository", "RunLeaseRequest", "RunLeaseResult", "RunLeaseRelease", "OrchestrationRunRecord", "RunStatus", "RunLeaseOptions"],
+    IOrchestrationRunRepository: ["OrchestrationRunRecord"],
+    InMemoryOrchestrationRunRepository: ["IOrchestrationRunRepository", "OrchestrationRunRecord"],
+    OrchestrationRunRecord: ["RunStatus"],
+    RunStatus: [],
+    RunLeaseRequest: [],
+    RunLeaseResult: ["OrchestrationRunRecord"],
+    RunLeaseRelease: ["RunStatus"],
+    ConcurrentRunRejectedException: ["OrchestrationRunRecord"],
+    RunLeaseLostException: ["OrchestrationRunRecord"],
   };
   // </dependencies>
 

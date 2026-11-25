@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Run Lease Renewal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout: scenario picker, then a stepper (timeline + state | step card), then the full sequence diagram, then the keeper's decision loop. */
+  :root {
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --fg: #17202b;
+    --muted: #5a6573;
+    --line: #d3d9e1;
+    --orch: #eef2f8;
+    --act: #f5f1ea;
+    --lease: #2563c9;
+    --lease-soft: #d6e3fa;
+    --other: #7c4dbc;
+    --other-soft: #e9ddf8;
+    --ok: #1d7a3e;
+    --fail: #a85b06;
+    --lost: #b42318;
+    --now: #c2410c;
+    --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #10151b; --surface: #18202a; --fg: #e3e9f0; --muted: #98a4b3; --line: #2e3a47;
+      --orch: #17212d; --act: #211c16;
+      --lease: #6ea8ff; --lease-soft: #1d3355; --other: #b993f0; --other-soft: #33254a;
+      --ok: #5fd08a; --fail: #f2b24f; --lost: #ff7b72; --now: #ff9a5c;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #10151b; --surface: #18202a; --fg: #e3e9f0; --muted: #98a4b3; --line: #2e3a47;
+    --orch: #17212d; --act: #211c16;
+    --lease: #6ea8ff; --lease-soft: #1d3355; --other: #b993f0; --other-soft: #33254a;
+    --ok: #5fd08a; --fail: #f2b24f; --lost: #ff7b72; --now: #ff9a5c;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-sans); font-size: 15px; line-height: 1.55; }
+  .page {
+    max-width: 1240px; margin: 0 auto; display: grid; gap: 22px;
+    padding-block: 28px 56px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  header { display: grid; gap: 6px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  h1 { margin: 0; font-size: 28px; font-weight: 600; line-height: 1.2; text-wrap: balance; }
+  h2 { margin: 0; font-size: 18px; font-weight: 600; text-wrap: balance; }
+  .lede { margin: 0; max-width: 74ch; color: var(--muted); }
+  code { font-family: var(--font-mono); font-size: 0.9em; }
+
+  .scenarios { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .scenario {
+    text-align: left; font: inherit; color: var(--fg); background: var(--surface); cursor: pointer;
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; display: grid; gap: 2px;
+  }
+  .scenario b { font-weight: 600; font-size: 14.5px; }
+  .scenario span { font-size: 13px; color: var(--muted); }
+  .scenario[aria-pressed="true"] { border-color: var(--fg); box-shadow: inset 0 0 0 1px var(--fg); }
+  .scenario .tag { font: 600 11px var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; }
+  .tag.ok { color: var(--ok); } .tag.fail { color: var(--fail); } .tag.lost { color: var(--lost); }
+  :focus-visible { outline: 2px solid var(--now); outline-offset: 2px; }
+
+  .stepper { display: grid; gap: 18px; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 940px) { .stepper { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; display: grid; gap: 14px; min-width: 0; }
+  .panel h3 { margin: 0; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .scroll-x { overflow-x: auto; }
+  svg { display: block; font-family: var(--font-mono); }
+  svg.timeline { width: 100%; min-width: 560px; height: auto; }
+
+  .state { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+  .cell { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; display: grid; gap: 2px; min-width: 0; }
+  .cell small { font-size: 11.5px; color: var(--muted); letter-spacing: 0.03em; text-transform: uppercase; }
+  .cell strong { font: 500 14px var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .cell.changed { border-color: var(--now); }
+
+  .step-card { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); }
+  .step-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); }
+  .chip { border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px; color: var(--fg); white-space: nowrap; }
+  .chip.time { border-color: var(--now); color: var(--now); }
+  .step-title { margin: 0; font: 600 16px var(--font-mono); overflow-wrap: anywhere; }
+  .step-text { margin: 0; }
+  .step-code { margin: 0; font-size: 13px; color: var(--muted); }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .controls button {
+    font: inherit; font-size: 14px; cursor: pointer; color: var(--fg); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 6px; padding: 6px 12px;
+  }
+  .controls button.primary { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+  .controls button:disabled { opacity: 0.4; cursor: default; }
+  .counter { font-family: var(--font-mono); font-size: 13px; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+  .hint { font-size: 12.5px; color: var(--muted); margin: 0; }
+
+  .seq-box { max-height: 620px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  .lane-head { font-family: var(--font-sans); font-size: 12.5px; font-weight: 600; fill: var(--fg); }
+  .lane-sub { font-family: var(--font-sans); font-size: 11px; fill: var(--muted); }
+  .msg text { font-size: 11.5px; fill: var(--fg); }
+  .msg .t { fill: var(--muted); }
+  .msg line { stroke: var(--fg); stroke-width: 1.2; }
+  .msg.return line { stroke-dasharray: 5 4; }
+  .msg.future { opacity: 0.22; }
+  .msg.current line { stroke: var(--now); stroke-width: 2.2; }
+  .msg.current text { font-weight: 600; }
+  .msg.tone-ok text.l { fill: var(--ok); }
+  .msg.tone-fail text.l { fill: var(--fail); }
+  .msg.tone-lost text.l { fill: var(--lost); }
+  .msg.tone-cancel text.l { fill: var(--muted); }
+  .msg { cursor: pointer; }
+  .msg:hover .band { fill: var(--orch); }
+  .band { fill: transparent; }
+  .msg.current .band { fill: var(--lease-soft); }
+  .note rect.box { fill: var(--surface); stroke: var(--muted); stroke-width: 1; }
+  .note.tone-ok rect.box { stroke: var(--ok); }
+  .note.tone-fail rect.box { stroke: var(--fail); }
+  .note.tone-lost rect.box { stroke: var(--lost); }
+  .m-normal path { fill: var(--fg); }
+  .m-current path { fill: var(--now); }
+
+  .loop-grid { display: grid; gap: 18px; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 940px) { .loop-grid { grid-template-columns: minmax(0, 1fr); } }
+  svg.flow { width: 100%; min-width: 640px; height: auto; }
+  .flow .node rect, .flow .node polygon { fill: var(--surface); stroke: var(--fg); stroke-width: 1.1; }
+  .flow .node.ok rect { stroke: var(--ok); stroke-width: 1.8; }
+  .flow .node.fail rect { stroke: var(--fail); stroke-width: 1.8; }
+  .flow .node.lost rect { stroke: var(--lost); stroke-width: 1.8; }
+  .flow text { font-family: var(--font-sans); font-size: 12px; fill: var(--fg); }
+  .flow text.edge { font-family: var(--font-mono); font-size: 11px; fill: var(--muted); }
+  .flow path.arrow { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+  .flow .ah { fill: var(--muted); }
+  .rules { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+  .rules li { max-width: 60ch; }
+  @media (prefers-reduced-motion: no-preference) { .msg, .cell { transition: opacity 150ms ease, border-color 150ms ease; } }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <header>
+    <div class="eyebrow">DurableFunctionOrchestrator.Sdk · Concurrency</div>
+    <h1>Run Lease Renewal</h1>
+    <p class="lede">Step through how an orchestrator keeps its run lease while a long stage, such as a 12-hour polling step, is still working. Every scenario uses a 60-minute lease renewed every 20 minutes, the default third of the lease.</p>
+  </header>
+
+  <section aria-labelledby="pick-title" style="display: grid; gap: 10px;">
+    <h2 id="pick-title">Pick a workflow</h2>
+    <div class="scenarios" id="scenarios" role="group" aria-label="Scenarios"></div>
+  </section>
+
+  <section class="stepper" aria-label="Step-by-step walkthrough">
+    <div class="panel">
+      <h3>Timeline (minutes since the run started)</h3>
+      <div class="scroll-x"><svg class="timeline" id="timeline" role="img" aria-label="Timeline of the stage, the renewals and the lease"></svg></div>
+      <h3>State after this step</h3>
+      <div class="state" id="state"></div>
+    </div>
+    <div class="panel step-card" id="step-card">
+      <div class="step-meta" id="step-meta"></div>
+      <p class="step-title" id="step-title"></p>
+      <p class="step-text" id="step-text"></p>
+      <p class="step-code" id="step-code"></p>
+      <div class="controls">
+        <button type="button" id="prev">Back</button>
+        <button type="button" id="next" class="primary">Next step</button>
+        <button type="button" id="play">Play</button>
+        <button type="button" id="restart">Restart</button>
+        <span class="counter" id="counter"></span>
+      </div>
+      <p class="hint">Use the arrow keys to step, or click any message in the sequence diagram.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="seq-title" style="display: grid; gap: 10px;">
+    <h2 id="seq-title">Sequence diagram</h2>
+    <p class="lede">Solid arrows are calls, dashed arrows are replies. The shaded columns on the left run inside the orchestration, which replays and must not do I/O. The two on the right run in activities, which talk to the database.</p>
+    <div class="seq-box" id="seq-box"><svg id="sequence" role="img" aria-label="Sequence diagram of the selected scenario"></svg></div>
+  </section>
+
+  <section aria-labelledby="loop-title" style="display: grid; gap: 10px;">
+    <h2 id="loop-title">The keeper's loop</h2>
+    <div class="loop-grid">
+      <div class="panel scroll-x">
+        <svg class="flow" viewBox="0 0 900 320" role="img" aria-label="Decision loop of RunLeaseKeeper: wait for the stage or the timer; if the stage finishes, cancel the timer; if the timer fires, renew; renewed waits again, lost or out-of-time failures throw RunLeaseLostException.">
+          <defs><marker id="fa" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="ah" d="M0,0 L8,4 L0,8 z"/></marker></defs>
+          <g class="node"><rect x="10" y="118" width="150" height="54" rx="6"/><text x="85" y="140" text-anchor="middle">Stage running,</text><text x="85" y="157" text-anchor="middle">timer set</text></g>
+          <g class="node"><polygon points="250,95 330,145 250,195 170,145"/><text x="250" y="141" text-anchor="middle">First to</text><text x="250" y="157" text-anchor="middle">finish?</text></g>
+          <g class="node ok"><rect x="380" y="24" width="190" height="54" rx="6"/><text x="475" y="46" text-anchor="middle">Cancel the timer,</text><text x="475" y="63" text-anchor="middle">return the stage result</text></g>
+          <g class="node"><rect x="380" y="198" width="150" height="54" rx="6"/><text x="455" y="220" text-anchor="middle">Call the renew</text><text x="455" y="237" text-anchor="middle">activity</text></g>
+          <g class="node"><polygon points="630,175 705,225 630,275 555,225"/><text x="630" y="221" text-anchor="middle">Renewal</text><text x="630" y="237" text-anchor="middle">result?</text></g>
+          <g class="node ok"><rect x="735" y="110" width="160" height="62" rx="6"/><text x="815" y="132" text-anchor="middle">Lease = now + lease.</text><text x="815" y="149" text-anchor="middle">Next timer,</text><text x="815" y="165" text-anchor="middle">wait again ↺</text></g>
+          <g class="node lost"><rect x="735" y="196" width="160" height="54" rx="6"/><text x="815" y="218" text-anchor="middle">Throw</text><text x="815" y="235" text-anchor="middle">RunLeaseLostException</text></g>
+          <g class="node fail"><rect x="735" y="262" width="160" height="54" rx="6"/><text x="815" y="281" text-anchor="middle">Next try before expiry?</text><text x="815" y="298" text-anchor="middle">yes: wait again ↺</text><text x="815" y="313" text-anchor="middle">no: throw RunLeaseLost…</text></g>
+          <path class="arrow" d="M160,145 L168,145" marker-end="url(#fa)"/>
+          <path class="arrow" d="M290,120 C320,70 340,51 376,51" marker-end="url(#fa)"/><text class="edge" x="318" y="78">stage</text>
+          <path class="arrow" d="M290,170 C320,215 345,225 376,225" marker-end="url(#fa)"/><text class="edge" x="318" y="212">timer</text>
+          <path class="arrow" d="M530,225 L551,225" marker-end="url(#fa)"/>
+          <path class="arrow" d="M680,205 C705,170 712,141 731,141" marker-end="url(#fa)"/><text class="edge" x="690" y="168">renewed</text>
+          <path class="arrow" d="M705,225 L731,225" marker-end="url(#fa)"/><text class="edge" x="704" y="218">lost</text>
+          <path class="arrow" d="M680,245 C705,280 712,289 731,289" marker-end="url(#fa)"/><text class="edge" x="690" y="285">failed</text>
+        </svg>
+      </div>
+      <div class="panel">
+        <h3>Why it is safe</h3>
+        <ul class="rules">
+          <li><strong>Renewal runs beside the stage.</strong> The stage is never paused. A durable timer races it, so a 12-hour polling step, a long activity and a sub-orchestration are all covered the same way.</li>
+          <li><strong>The schedule ignores stage boundaries.</strong> The next renewal is due a fixed interval after the last one, whichever stage is running.</li>
+          <li><strong>A renewal only extends a lease the run still holds.</strong> It never takes a free one, because a run that lost its lease may already have overlapped with another.</li>
+          <li><strong>When in doubt, stop.</strong> If the next attempt would come after the lease could expire, the run throws instead of running unprotected.</li>
+          <li><strong>Cancel what you don't need.</strong> When the stage wins, the pending timer is cancelled, because an outstanding timer would keep the orchestration from completing.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  const LANES = [
+    { id: "R", name: "PipelineRunner", sub: "runs the stages" },
+    { id: "K", name: "RunLeaseKeeper", sub: "renews the lease" },
+    { id: "S", name: "Stage", sub: "e.g. a polling step" },
+    { id: "T", name: "Durable timers", sub: "Durable Task" },
+    { id: "A", name: "Lease activities", sub: "RunLeaseService" },
+    { id: "D", name: "Database", sub: "the run record" },
+  ];
+  const ORCHESTRATION_LANES = 4;
+
+  // Each step is one arrow (from → to) or a note over lanes. "set" updates the state shown beside the timeline.
+  const SCENARIOS = [
+    {
+      id: "normal", title: "Long stage, lease kept", tag: "Completed", tone: "ok",
+      summary: "A 50-minute polling step is covered by two renewals.",
+      maxT: 110, stage: { start: 0, end: 50 },
+      steps: [
+        { t: 0, from: "R", to: "A", label: "acquire(60 min)", text: "Before the first stage, the runner calls the acquire activity. Orchestrator code can't touch the database, so every lease operation goes through an activity.", code: "RunLeaseGuard.AcquireAsync", set: { result: "Starting" } },
+        { t: 0, from: "A", to: "D", label: "free? insert Running", text: "No other run holds the lease, so RunLeaseService writes a Running record keyed by the orchestrator name, valid until 1:00. The write is conditional, so only one of several racing instances can win.", code: "RunLeaseService.TryAcquireAsync", set: { record: "This run · Running", ours: { from: 0, until: 60 } } },
+        { t: 0, from: "A", to: "R", kind: "return", label: "Acquired = true", tone: "ok", text: "The run holds the lease until 1:00." },
+        { t: 0, from: "R", to: "K", label: "CoverAsync(stage 1)", text: "Instead of awaiting the stage directly, the runner hands it to the keeper. The first renewal is due at 0:20, a third of the lease after it was acquired.", code: "PipelineRunner → keeper.CoverAsync(stage)", set: { next: 20 } },
+        { t: 0, from: "K", to: "S", label: "start polling step", text: "The stage starts. It runs on its own: its polling checks and waits don't know about the lease.", set: { stage: "Running" } },
+        { t: 0, from: "K", to: "T", label: "CreateTimer(0:20)", text: "The keeper creates a durable timer for the next renewal and waits for whichever finishes first: the stage or the timer (Task.WhenAny). The orchestration is unloaded while both wait.", code: "await Task.WhenAny(work, timer)" },
+        { t: 20, from: "T", to: "K", kind: "return", label: "timer fired: timer won", text: "At 0:20 the stage is still polling, so the timer wins. The stage isn't interrupted; it keeps running." },
+        { t: 20, from: "K", to: "A", label: "renew(60 min)", text: "The keeper calls the renew activity.", code: "RunLeaseKeeper.RenewAsync" },
+        { t: 20, from: "A", to: "D", label: "still holder? extend", text: "RunLeaseService checks that this run still holds the lease and that the record hasn't changed (ETag), then extends the lease to now + 60 minutes: 1:20.", code: "RunLeaseService.RenewAsync", set: { ours: { from: 0, until: 80 } } },
+        { t: 20, from: "A", to: "K", kind: "return", label: "Acquired = true", tone: "ok", mark: "ok", text: "Renewed. The next renewal is due at 0:40.", set: { next: 40 } },
+        { t: 20, from: "K", to: "T", label: "CreateTimer(0:40)", text: "A new timer, and the race starts again." },
+        { t: 40, from: "T", to: "K", kind: "return", label: "timer fired: timer won", text: "Still polling at 0:40: the timer wins again." },
+        { t: 40, from: "K", to: "A", label: "renew(60 min)", text: "Second renewal." },
+        { t: 40, from: "A", to: "D", label: "still holder? extend", text: "The lease now runs until 1:40.", set: { ours: { from: 0, until: 100 } } },
+        { t: 40, from: "A", to: "K", kind: "return", label: "Acquired = true", tone: "ok", mark: "ok", text: "Renewed. Next renewal at 1:00.", set: { next: 60 } },
+        { t: 40, from: "K", to: "T", label: "CreateTimer(1:00)", text: "The keeper waits again." },
+        { t: 50, from: "S", to: "K", kind: "return", label: "stage finished: stage won", tone: "ok", text: "At 0:50 the polling step completes before the 1:00 timer, so the stage wins the race.", set: { stage: "Finished" } },
+        { t: 50, from: "K", to: "T", label: "cancel timer (1:00)", tone: "cancel", mark: "cancel@60", text: "The pending timer is cancelled. An outstanding durable timer would keep the orchestration from completing.", code: "cancelTimer.Cancel()", set: { next: null } },
+        { t: 50, from: "K", to: "R", kind: "return", label: "stage result", text: "The keeper returns the stage's result. A second stage would use the same keeper and keep the same schedule: its next renewal would still be due at 1:00." },
+        { t: 50, from: "R", to: "A", label: "release(Completed)", text: "The run is over, so the runner releases the lease, whatever the outcome.", code: "RunLeaseGuard.ReleaseAsync (in a finally block)" },
+        { t: 50, from: "A", to: "D", label: "mark Completed, free", tone: "ok", text: "The record now says Completed. The next run of this orchestrator can acquire the lease at once.", set: { record: "This run · Completed", ours: { from: 0, until: 50, released: true }, result: "Completed" } },
+      ],
+    },
+    {
+      id: "one-failure", title: "One renewal fails", tag: "Completed", tone: "fail",
+      summary: "The database blips at 0:40; the next renewal recovers.",
+      maxT: 130, stage: { start: 0, end: 70 },
+      steps: [
+        { t: 0, from: "R", to: "A", label: "acquire(60 min)", text: "The run acquires the lease, as in the first scenario.", set: { result: "Starting" } },
+        { t: 0, from: "A", to: "R", kind: "return", label: "Acquired (until 1:00)", tone: "ok", text: "The lease is valid until 1:00.", set: { record: "This run · Running", ours: { from: 0, until: 60 } } },
+        { t: 0, from: "R", to: "K", label: "CoverAsync(stage 1)", text: "The stage is handed to the keeper. First renewal due at 0:20.", set: { next: 20 } },
+        { t: 0, from: "K", to: "S", label: "start polling step", text: "A 70-minute polling step starts.", set: { stage: "Running" } },
+        { t: 0, from: "K", to: "T", label: "CreateTimer(0:20)", text: "The race between the stage and the timer starts." },
+        { t: 20, from: "T", to: "K", kind: "return", label: "timer fired", text: "The timer wins at 0:20." },
+        { t: 20, from: "K", to: "A", label: "renew(60 min)", text: "First renewal." },
+        { t: 20, from: "A", to: "D", label: "still holder? extend", text: "Lease extended to 1:20.", set: { ours: { from: 0, until: 80 } } },
+        { t: 20, from: "A", to: "K", kind: "return", label: "Acquired = true", tone: "ok", mark: "ok", text: "Renewed. The keeper now knows the lease is valid until at least 1:20.", set: { next: 40 } },
+        { t: 20, from: "K", to: "T", label: "CreateTimer(0:40)", text: "Next renewal at 0:40." },
+        { t: 40, from: "T", to: "K", kind: "return", label: "timer fired", text: "The timer wins at 0:40." },
+        { t: 40, from: "K", to: "A", label: "renew(60 min)", text: "Second renewal." },
+        { t: 40, from: "A", to: "D", label: "database unavailable", tone: "fail", text: "The database can't be reached. The activity's retry policy tries again, and every attempt fails." },
+        { t: 40, from: "A", to: "K", kind: "return", label: "TaskFailedException", tone: "fail", mark: "fail", text: "The renew activity fails. Nothing was written, so the lease is still valid until 1:20." },
+        { note: true, t: 40, over: ["K", "S"], label: "next 1:00 < expiry 1:20 → keep going", tone: "fail", text: "The keeper asks one question: will the next attempt, at 1:00, still come before the lease could expire, at 1:20? It will, so the run continues. A renewal interval of a third of the lease leaves room for exactly one failure.", code: "if (now + RenewalSeconds >= expiresAt) throw …", set: { next: 60 } },
+        { t: 40, from: "K", to: "T", label: "CreateTimer(1:00)", text: "The keeper waits for the next renewal as usual." },
+        { t: 60, from: "T", to: "K", kind: "return", label: "timer fired", text: "The timer wins at 1:00." },
+        { t: 60, from: "K", to: "A", label: "renew(60 min)", text: "Third renewal, the database is back." },
+        { t: 60, from: "A", to: "D", label: "still holder? extend", text: "Lease extended to 2:00.", set: { ours: { from: 0, until: 120 } } },
+        { t: 60, from: "A", to: "K", kind: "return", label: "Acquired = true", tone: "ok", mark: "ok", text: "Recovered. Next renewal at 1:20.", set: { next: 80 } },
+        { t: 60, from: "K", to: "T", label: "CreateTimer(1:20)", text: "The race starts again." },
+        { t: 70, from: "S", to: "K", kind: "return", label: "stage finished: stage won", tone: "ok", text: "The stage completes at 1:10.", set: { stage: "Finished" } },
+        { t: 70, from: "K", to: "T", label: "cancel timer (1:20)", tone: "cancel", mark: "cancel@80", text: "The pending timer is cancelled.", set: { next: null } },
+        { t: 70, from: "K", to: "R", kind: "return", label: "stage result", text: "The stage's result goes back to the runner." },
+        { t: 70, from: "R", to: "A", label: "release(Completed)", text: "The runner releases the lease." },
+        { t: 70, from: "A", to: "D", label: "mark Completed, free", tone: "ok", text: "The run completed normally despite the failed renewal.", set: { record: "This run · Completed", ours: { from: 0, until: 70, released: true }, result: "Completed" } },
+      ],
+    },
+    {
+      id: "keeps-failing", title: "Renewals keep failing", tag: "Failed", tone: "lost",
+      summary: "Two failures in a row: the run stops before its lease could expire.",
+      maxT: 100, stage: { start: 0, end: 180 },
+      steps: [
+        { t: 0, from: "R", to: "A", label: "acquire(60 min)", text: "The run acquires the lease.", set: { result: "Starting" } },
+        { t: 0, from: "A", to: "R", kind: "return", label: "Acquired (until 1:00)", tone: "ok", text: "Valid until 1:00.", set: { record: "This run · Running", ours: { from: 0, until: 60 } } },
+        { t: 0, from: "R", to: "K", label: "CoverAsync(stage 1)", text: "First renewal due at 0:20.", set: { next: 20 } },
+        { t: 0, from: "K", to: "S", label: "start polling step", text: "A 3-hour polling step starts.", set: { stage: "Running" } },
+        { t: 0, from: "K", to: "T", label: "CreateTimer(0:20)", text: "The race starts." },
+        { t: 20, from: "T", to: "K", kind: "return", label: "timer fired", text: "The timer wins at 0:20." },
+        { t: 20, from: "K", to: "A", label: "renew(60 min)", text: "First renewal." },
+        { t: 20, from: "A", to: "D", label: "database unavailable", tone: "fail", text: "The database is down, and every retry fails." },
+        { t: 20, from: "A", to: "K", kind: "return", label: "TaskFailedException", tone: "fail", mark: "fail", text: "The lease is still valid until 1:00, unchanged." },
+        { note: true, t: 20, over: ["K", "S"], label: "next 0:40 < expiry 1:00 → keep going", tone: "fail", text: "The next attempt, at 0:40, still comes before the lease could expire. The run continues.", set: { next: 40 } },
+        { t: 20, from: "K", to: "T", label: "CreateTimer(0:40)", text: "The keeper waits for the next attempt." },
+        { t: 40, from: "T", to: "K", kind: "return", label: "timer fired", text: "The timer wins at 0:40." },
+        { t: 40, from: "K", to: "A", label: "renew(60 min)", text: "Second renewal." },
+        { t: 40, from: "A", to: "D", label: "database unavailable", tone: "fail", text: "Still down." },
+        { t: 40, from: "A", to: "K", kind: "return", label: "TaskFailedException", tone: "fail", mark: "fail", text: "Second failure. The lease is still valid only until 1:00." },
+        { note: true, t: 40, over: ["K", "S"], label: "next 1:00 ≥ expiry 1:00 → too late", tone: "lost", text: "The next attempt would come exactly when the lease could expire. From then on, another region could take the lease while this run is still working, so the keeper stops the run now.", code: "throw new RunLeaseLostException(…)", set: { next: null } },
+        { t: 40, from: "K", to: "R", kind: "return", label: "throw RunLeaseLostException", tone: "lost", text: "The exception escapes the stage. The polling step is abandoned: its pending work no longer matters, because the orchestration is failing.", set: { stage: "Abandoned", result: "Failing" } },
+        { t: 40, from: "R", to: "A", label: "release(Failed)", text: "The finally block still tries to release the lease, recording the failure." },
+        { t: 40, from: "A", to: "D", label: "database unavailable", tone: "fail", text: "The database is still down, so the release fails too." },
+        { t: 40, from: "A", to: "R", kind: "return", label: "TaskFailedException (logged)", tone: "fail", text: "A failed release is logged, not raised, so it doesn't hide the run's real error (RunLeaseLostException)." },
+        { note: true, t: 60, over: ["A", "D"], label: "lease expires on its own", tone: "lost", text: "Nothing could be written, but the lease expires at 1:00 anyway. Once the database is back, the next run can acquire it.", set: { record: "This run · Running (expired)", ours: { from: 0, until: 60, expired: true }, result: "Failed: RunLeaseLostException" } },
+      ],
+    },
+    {
+      id: "taken-over", title: "Another region takes over", tag: "Failed", tone: "lost",
+      summary: "An outage delays renewal past expiry; region B's run now holds the lease.",
+      maxT: 140, stage: { start: 0, end: 180 },
+      steps: [
+        { t: 0, from: "R", to: "A", label: "acquire(60 min)", text: "The run acquires the lease.", set: { result: "Starting" } },
+        { t: 0, from: "A", to: "R", kind: "return", label: "Acquired (until 1:00)", tone: "ok", text: "Valid until 1:00.", set: { record: "This run · Running", ours: { from: 0, until: 60 } } },
+        { t: 0, from: "R", to: "K", label: "CoverAsync(stage 1)", text: "First renewal due at 0:20.", set: { next: 20 } },
+        { t: 0, from: "K", to: "S", label: "start polling step", text: "A long polling step starts.", set: { stage: "Running" } },
+        { t: 0, from: "K", to: "T", label: "CreateTimer(0:20)", text: "The race starts." },
+        { note: true, t: 10, over: ["R", "T"], label: "this region's workers go down", tone: "fail", text: "Every worker in this region stops. Durable timers can't be delivered and no orchestration code runs, so the 0:20 renewal doesn't happen.", set: { stage: "Paused (outage)" } },
+        { note: true, t: 60, over: ["A", "D"], label: "lease expires", tone: "lost", text: "No renewal reached the database, so the lease expires at 1:00. The record still names this run, but it no longer blocks anyone.", set: { record: "This run · Running (expired)", ours: { from: 0, until: 60, expired: true } } },
+        { note: true, t: 65, over: ["A", "D"], label: "region B acquires the lease", tone: "lost", text: "A run of the same orchestrator in region B starts, finds the expired lease, and takes it: Running until 2:05.", set: { record: "Region B · Running", theirs: { from: 65, until: 125 } } },
+        { t: 75, from: "T", to: "K", kind: "return", label: "timer fired (late, 1:15)", text: "Workers are back at 1:15. The overdue 0:20 timer is delivered, so the keeper renews.", set: { stage: "Running" } },
+        { t: 75, from: "K", to: "A", label: "renew(60 min)", text: "The keeper tries to renew." },
+        { t: 75, from: "A", to: "D", label: "held by region B → no write", tone: "lost", text: "The record is now held by region B's run. A renewal never takes a lease it doesn't hold, so nothing is written." },
+        { t: 75, from: "A", to: "K", kind: "return", label: "Acquired = false (region B)", tone: "lost", mark: "lost", text: "The keeper learns that another run holds the lease. Both runs may already have overlapped, so this one must stop." },
+        { t: 75, from: "K", to: "R", kind: "return", label: "throw RunLeaseLostException", tone: "lost", text: "The run fails with RunLeaseLostException. Its Current property carries region B's record.", set: { stage: "Abandoned", next: null, result: "Failing" } },
+        { t: 75, from: "R", to: "A", label: "release(Failed)", text: "The finally block tries to release." },
+        { t: 75, from: "A", to: "D", label: "not the holder → no write", text: "This run isn't the holder, so the release changes nothing. Region B's lease is untouched." },
+        { note: true, t: 75, over: ["R", "K"], label: "this run fails; region B keeps running", tone: "lost", text: "Region B's run continues undisturbed and will release its own lease when it ends.", set: { result: "Failed: RunLeaseLostException" } },
+      ],
+    },
+    {
+      id: "rejected", title: "Already running", tag: "Rejected", tone: "lost",
+      summary: "Region B holds the lease when this run starts, so nothing runs.",
+      maxT: 60, stage: null,
+      steps: [
+        { t: 0, from: "R", to: "A", label: "acquire(60 min)", text: "The run asks for the lease before its first stage.", set: { result: "Starting" } },
+        { t: 0, from: "A", to: "D", label: "held by region B → no write", tone: "lost", text: "Region B's run holds an unexpired lease (until 0:45). RunLeaseService writes nothing.", set: { record: "Region B · Running", theirs: { from: 0, until: 45 } } },
+        { t: 0, from: "A", to: "R", kind: "return", label: "Acquired = false (region B)", tone: "lost", text: "The acquire result carries region B's record." },
+        { note: true, t: 0, over: ["R", "K"], label: "OnConcurrentRunRejectedAsync", tone: "lost", text: "The runner calls OnConcurrentRunRejectedAsync with region B's record. By default it throws ConcurrentRunRejectedException; the example's CarrierRateSyncOrchestrator overrides it to return AlreadyRunning instead.", code: "ActivityOrchestrator.OnConcurrentRunRejectedAsync" },
+        { note: true, t: 0, over: ["R", "K", "S"], label: "no stage, no renewal, no release", tone: "lost", text: "Nothing else happens: the run never held the lease, so there's nothing to renew or release. Its custom status is Rejected.", set: { result: "Rejected (AlreadyRunning)" } },
+      ],
+    },
+  ];
+
+  const INITIAL = { record: "No record yet", ours: null, theirs: null, next: null, stage: "Not started", result: "Not started" };
+  const SVGNS = "http://www.w3.org/2000/svg";
+  const el = (name, attrs = {}, parent) => {
+    const node = document.createElementNS(SVGNS, name);
+    // Theme colors go through style, so CSS variables always resolve.
+    let style = "";
+    for (const [k, v] of Object.entries(attrs)) {
+      if ((k === "fill" || k === "stroke" || k === "font-family") && String(v).includes("var("))
+        style += `${k}: ${v};`;
+      else
+        node.setAttribute(k, v);
+    }
+    if (style) node.setAttribute("style", style);
+    if (parent) parent.appendChild(node);
+    return node;
+  };
+  const fmt = minutes => `${Math.floor(minutes / 60)}:${String(Math.round(minutes % 60)).padStart(2, "0")}`;
+
+  let scenario = SCENARIOS[0];
+  let index = 0;
+  let playing = null;
+
+  function stateAt(i) {
+    const state = { ...INITIAL };
+    for (let k = 0; k <= i; k++) Object.assign(state, scenario.steps[k].set || {});
+    state.clock = scenario.steps[i].t;
+    return state;
+  }
+
+  function changedKeys(i) {
+    return new Set(Object.keys(scenario.steps[i].set || {}));
+  }
+
+  function renderScenarios() {
+    const box = document.getElementById("scenarios");
+    box.replaceChildren();
+    for (const s of SCENARIOS) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "scenario";
+      b.setAttribute("aria-pressed", String(s === scenario));
+      b.innerHTML = `<span class="tag ${s.tone}">${s.tag}</span><b>${s.title}</b><span>${s.summary}</span>`;
+      b.addEventListener("click", () => selectScenario(s.id, true));
+      box.appendChild(b);
+    }
+  }
+
+  function renderTimeline(state) {
+    const svg = document.getElementById("timeline");
+    svg.replaceChildren();
+    const W = 760, left = 132, right = 744, maxT = scenario.maxT;
+    const hasTheirs = scenario.steps.some(s => s.set && s.set.theirs);
+    const rows = { stage: 52, ours: 88, theirs: 124, renew: hasTheirs ? 160 : 124 };
+    const H = rows.renew + 36;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    const x = t => left + Math.min(t, maxT) / maxT * (right - left);
+
+    for (let t = 0; t <= maxT; t += 10) {
+      const major = t % 20 === 0;
+      el("line", { x1: x(t), x2: x(t), y1: 24, y2: H - 12, stroke: "var(--line)", "stroke-width": major ? 1 : 0.5 }, svg);
+      if (major) el("text", { x: x(t), y: 16, "text-anchor": "middle", "font-size": 11, fill: "var(--muted)" }, svg).textContent = fmt(t);
+    }
+
+    const label = (y, text) => { el("text", { x: 8, y: y + 4, "font-size": 11.5, fill: "var(--fg)", "font-family": "var(--font-sans)" }, svg).textContent = text; };
+    label(rows.stage, "Stage");
+    label(rows.ours, "Lease, this run");
+    if (hasTheirs) label(rows.theirs, "Lease, region B");
+    label(rows.renew, "Renewals");
+
+    if (scenario.stage) {
+      const { start, end } = scenario.stage;
+      el("rect", { x: x(start), y: rows.stage - 9, width: x(end) - x(start), height: 18, rx: 3, fill: "none", stroke: "var(--muted)", "stroke-dasharray": "4 3" }, svg);
+      if (state.stage !== "Not started") {
+        const stopAt = state.stage === "Finished" ? end : Math.min(state.clock, end);
+        const w = Math.max(x(stopAt) - x(start), 2);
+        el("rect", { x: x(start), y: rows.stage - 9, width: w, height: 18, rx: 3, fill: state.stage === "Abandoned" ? "var(--lost)" : "var(--fg)", opacity: 0.75 }, svg);
+      }
+      if (end > maxT) el("text", { x: right - 2, y: rows.stage + 4, "text-anchor": "end", "font-size": 10.5, fill: "var(--muted)" }, svg).textContent = `runs to ${fmt(end)} →`;
+    } else {
+      el("text", { x: left, y: rows.stage + 4, "font-size": 11, fill: "var(--muted)" }, svg).textContent = "never starts";
+    }
+
+    const band = (row, lease, color, soft) => {
+      if (!lease) return;
+      const w = Math.max(x(lease.until) - x(lease.from), 2);
+      el("rect", { x: x(lease.from), y: row - 10, width: w, height: 20, rx: 3, fill: soft, stroke: color, "stroke-width": 1.2, "stroke-dasharray": lease.expired ? "4 3" : "none" }, svg);
+      const text = lease.released ? `released at ${fmt(lease.until)}` : lease.expired ? `expired at ${fmt(lease.until)}` : `valid until ${fmt(lease.until)}`;
+      const tx = Math.min(x(lease.until) + 6, right - 4);
+      const anchor = x(lease.until) + 6 > right - 90 ? "end" : "start";
+      el("text", { x: anchor === "end" ? x(lease.until) - 6 : tx, y: row + 4, "text-anchor": anchor, "font-size": 11, fill: color, "font-weight": 600 }, svg).textContent = text;
+    };
+    band(rows.ours, state.ours, "var(--lease)", "var(--lease-soft)");
+    if (hasTheirs) band(rows.theirs, state.theirs, "var(--other)", "var(--other-soft)");
+
+    for (let k = 0; k <= index; k++) {
+      const step = scenario.steps[k];
+      if (!step.mark) continue;
+      const [type, at] = step.mark.split("@");
+      const t = at ? Number(at) : step.t;
+      const cx = x(t), cy = rows.renew;
+      const color = { ok: "var(--ok)", fail: "var(--fail)", lost: "var(--lost)", cancel: "var(--muted)" }[type];
+      if (type === "cancel") {
+        el("circle", { cx, cy, r: 7, fill: "var(--surface)", stroke: color, "stroke-width": 1.5 }, svg);
+        el("line", { x1: cx - 5, y1: cy + 5, x2: cx + 5, y2: cy - 5, stroke: color, "stroke-width": 1.5 }, svg);
+      } else {
+        el("circle", { cx, cy, r: 7, fill: color }, svg);
+        el("text", { x: cx, y: cy + 3.5, "text-anchor": "middle", "font-size": 9.5, fill: "var(--surface)", "font-weight": 700 }, svg).textContent = type === "ok" ? "✓" : "✕";
+      }
+    }
+    if (state.next != null) {
+      const cx = x(state.next);
+      el("circle", { cx, cy: rows.renew, r: 7, fill: "none", stroke: "var(--fg)", "stroke-dasharray": "2 2", "stroke-width": 1.3 }, svg);
+      el("text", { x: cx, y: rows.renew + 22, "text-anchor": "middle", "font-size": 10.5, fill: "var(--muted)" }, svg).textContent = "next";
+    }
+
+    const nx = x(state.clock);
+    el("line", { x1: nx, x2: nx, y1: 24, y2: H - 8, stroke: "var(--now)", "stroke-width": 2 }, svg);
+    el("text", { x: Math.min(nx + 4, right - 40), y: H - 2, "font-size": 11, fill: "var(--now)", "font-weight": 600 }, svg).textContent = `now ${fmt(state.clock)}`;
+  }
+
+  function renderState(state) {
+    const changed = changedKeys(index);
+    const lease = l => !l ? "—" : l.released ? `released ${fmt(l.until)}` : l.expired ? `expired ${fmt(l.until)}` : `until ${fmt(l.until)}`;
+    const cells = [
+      ["Orchestration clock", fmt(state.clock), "clock"],
+      ["Database record", state.record, "record"],
+      ["This run's lease", lease(state.ours), "ours"],
+      ["Next renewal due", state.next == null ? "—" : fmt(state.next), "next"],
+      ["Stage", state.stage, "stage"],
+      ["Run outcome", state.result, "result"],
+    ];
+    document.getElementById("state").innerHTML = cells
+      .map(([name, value, key]) => `<div class="cell${changed.has(key) ? " changed" : ""}"><small>${name}</small><strong>${value}</strong></div>`)
+      .join("");
+  }
+
+  function renderStep() {
+    const step = scenario.steps[index];
+    const laneName = id => LANES.find(l => l.id === id).name;
+    const who = step.note ? `note over ${step.over.map(laneName).join(", ")}` : `${laneName(step.from)} → ${laneName(step.to)}`;
+    document.getElementById("step-meta").innerHTML = `<span class="chip time">${fmt(step.t)}</span><span>${who}</span>`;
+    document.getElementById("step-title").textContent = step.label;
+    document.getElementById("step-text").textContent = step.text;
+    const code = document.getElementById("step-code");
+    code.innerHTML = step.code ? `Code: <code></code>` : "";
+    if (step.code) code.querySelector("code").textContent = step.code;
+    document.getElementById("counter").textContent = `Step ${index + 1} of ${scenario.steps.length}`;
+    document.getElementById("prev").disabled = index === 0;
+    document.getElementById("next").disabled = index === scenario.steps.length - 1;
+  }
+
+  function renderSequence() {
+    const svg = document.getElementById("sequence");
+    svg.replaceChildren();
+    const laneW = 170, left = 16, top = 86, row = 36;
+    const W = left * 2 + LANES.length * laneW;
+    const H = top + scenario.steps.length * row + 24;
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("width", W);
+    svg.setAttribute("height", H);
+    const cx = id => left + LANES.findIndex(l => l.id === id) * laneW + laneW / 2;
+
+    const defs = el("defs", {}, svg);
+    for (const kind of ["normal", "current"]) {
+      const m = el("marker", { id: `arrow-${kind}`, class: `m-${kind}`, viewBox: "0 0 8 8", refX: "7.5", refY: "4", markerWidth: "7", markerHeight: "7", orient: "auto" }, defs);
+      el("path", { d: "M0,0 L8,4 L0,8 z" }, m);
+    }
+
+    el("rect", { x: left, y: 0, width: ORCHESTRATION_LANES * laneW, height: H, fill: "var(--orch)" }, svg);
+    el("rect", { x: left + ORCHESTRATION_LANES * laneW, y: 0, width: (LANES.length - ORCHESTRATION_LANES) * laneW, height: H, fill: "var(--act)" }, svg);
+    el("text", { x: left + 8, y: 16, "font-size": 10.5, fill: "var(--muted)" }, svg).textContent = "ORCHESTRATION · replays, no I/O";
+    el("text", { x: left + ORCHESTRATION_LANES * laneW + 8, y: 16, "font-size": 10.5, fill: "var(--muted)" }, svg).textContent = "ACTIVITIES · I/O";
+
+    LANES.forEach(lane => {
+      const x = cx(lane.id);
+      el("rect", { x: x - 72, y: 26, width: 144, height: 40, rx: 6, fill: "var(--surface)", stroke: "var(--line)" }, svg);
+      el("text", { x, y: 43, "text-anchor": "middle", class: "lane-head" }, svg).textContent = lane.name;
+      el("text", { x, y: 58, "text-anchor": "middle", class: "lane-sub" }, svg).textContent = lane.sub;
+      el("line", { x1: x, x2: x, y1: 66, y2: H - 8, stroke: "var(--line)", "stroke-dasharray": "3 4" }, svg);
+    });
+
+    // The stage's activation bar, from "start" to the step where it finished or was abandoned.
+    const startIdx = scenario.steps.findIndex(s => s.from === "K" && s.to === "S");
+    if (startIdx >= 0) {
+      let endIdx = scenario.steps.findIndex(s => s.from === "S");
+      const abandonIdx = scenario.steps.findIndex(s => s.set && s.set.stage === "Abandoned");
+      if (endIdx < 0) endIdx = abandonIdx >= 0 ? abandonIdx : scenario.steps.length - 1;
+      el("rect", { x: cx("S") - 5, y: top + startIdx * row, width: 10, height: (endIdx - startIdx) * row, fill: "var(--lease-soft)", stroke: "var(--lease)" }, svg);
+    }
+
+    scenario.steps.forEach((step, i) => {
+      const y = top + i * row + 12;
+      const state = i < index ? "past" : i === index ? "current" : "future";
+      const g = el("g", { class: `${step.note ? "note" : "msg"} msg ${step.kind === "return" ? "return" : ""} ${state} ${step.tone ? "tone-" + step.tone : ""}` }, svg);
+      el("rect", { class: "band", x: left, y: y - 20, width: W - left * 2, height: row }, g);
+      if (step.note) {
+        const xs = step.over.map(cx);
+        const x1 = Math.min(...xs) - 82, x2 = Math.max(...xs) + 82;
+        el("rect", { class: "box", x: x1, y: y - 13, width: x2 - x1, height: 24, rx: 4 }, g);
+        el("text", { class: "l", x: (x1 + x2) / 2, y: y + 3, "text-anchor": "middle" }, g).textContent = `${fmt(step.t)} · ${step.label}`;
+      } else {
+        const x1 = cx(step.from), x2 = cx(step.to);
+        const dir = Math.sign(x2 - x1);
+        el("line", { x1, y1: y, x2: x2 - dir * 2, y2: y, "marker-end": `url(#arrow-${state === "current" ? "current" : "normal"})` }, g);
+        const mid = (x1 + x2) / 2;
+        const t = el("text", { x: mid, y: y - 6, "text-anchor": "middle" }, g);
+        const ts = el("tspan", { class: "t" }, t); ts.textContent = `${fmt(step.t)} `;
+        const ls = el("tspan", { class: "l" }, t); ls.textContent = step.label;
+      }
+      g.addEventListener("click", () => go(i));
+    });
+
+    // Keep the current step in view.
+    const box = document.getElementById("seq-box");
+    const y = top + index * row;
+    if (y < box.scrollTop + 60 || y > box.scrollTop + box.clientHeight - 60)
+      box.scrollTop = Math.max(0, y - box.clientHeight / 2);
+  }
+
+  function render() {
+    const state = stateAt(index);
+    renderTimeline(state);
+    renderState(state);
+    renderStep();
+    renderSequence();
+  }
+
+  function go(i) {
+    index = Math.max(0, Math.min(scenario.steps.length - 1, i));
+    render();
+  }
+
+  function stop() {
+    if (playing) clearInterval(playing);
+    playing = null;
+    document.getElementById("play").textContent = "Play";
+  }
+
+  function selectScenario(id, updateHash) {
+    stop();
+    scenario = SCENARIOS.find(s => s.id === id) || SCENARIOS[0];
+    index = 0;
+    if (updateHash && location.hash.slice(1) !== scenario.id) {
+      try { history.replaceState(null, "", "#" + scenario.id); } catch { location.hash = scenario.id; }
+    }
+    renderScenarios();
+    document.getElementById("seq-box").scrollTop = 0;
+    render();
+  }
+
+  document.getElementById("prev").addEventListener("click", () => { stop(); go(index - 1); });
+  document.getElementById("next").addEventListener("click", () => { stop(); go(index + 1); });
+  document.getElementById("restart").addEventListener("click", () => { stop(); go(0); });
+  document.getElementById("play").addEventListener("click", () => {
+    if (playing) return stop();
+    if (index === scenario.steps.length - 1) go(0);
+    document.getElementById("play").textContent = "Pause";
+    playing = setInterval(() => {
+      if (index >= scenario.steps.length - 1) return stop();
+      go(index + 1);
+    }, 1700);
+  });
+  document.addEventListener("keydown", e => {
+    if (e.target.closest && e.target.closest("select, input, textarea")) return;
+    if (e.key === "ArrowRight") { stop(); go(index + 1); e.preventDefault(); }
+    if (e.key === "ArrowLeft") { stop(); go(index - 1); e.preventDefault(); }
+  });
+  window.addEventListener("hashchange", () => selectScenario(location.hash.slice(1), false));
+
+  selectScenario(location.hash.slice(1) || "normal", false);
+</script>
+</body>
+</html>

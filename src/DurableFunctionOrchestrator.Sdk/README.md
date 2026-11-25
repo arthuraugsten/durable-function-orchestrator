@@ -172,6 +172,93 @@ private static readonly StepHandle<ReportResult> Report = Steps.Polling(
 
 Completion is noticed at most `maxIntervalSeconds` late, and never more than 8 minutes late.
 
+## Preventing concurrent runs
+
+Some orchestrators must never run twice at the same time, for example a job that syncs data, even when several
+instances in several regions can start them. Return `RunLeaseOptions` from `RunLease`:
+
+```csharp
+public sealed class CarrierRateSyncOrchestrator : ActivityOrchestrator<RateSyncRequest, RateSyncResult>
+{
+  protected override RunLeaseOptions RunLease { get; } = new(leaseSeconds: 10 * 60);
+
+  // Optional: report the rejection as a result. The default throws ConcurrentRunRejectedException.
+  protected override Task<RateSyncResult> OnConcurrentRunRejectedAsync(
+    TaskOrchestrationContext context, OrchestrationState<RateSyncRequest> state, OrchestrationRunRecord current) =>
+    Task.FromResult(new RateSyncResult(RateSyncStatus.AlreadyRunning, RunningInstanceId: current.InstanceId));
+}
+```
+
+How it works (to step through each workflow with a timeline and sequence diagram, open
+[`docs/run-lease-renewal.html`](../../docs/run-lease-renewal.html) in a browser):
+
+1. **Before the first stage**, the orchestrator calls the *acquire* activity with its **orchestrator name** (the record's
+   primary key), its instance ID and the lease length. The activity calls `RunLeaseService.TryAcquireAsync`, which
+   reads the `OrchestrationRunRecord` for that name from an `IOrchestrationRunRepository`:
+   - no record, or the last run ended, or the holder's lease expired: it writes a `Running` record for this instance;
+   - another instance holds an unexpired lease: the run is **rejected**. The pipeline doesn't run,
+     `OnConcurrentRunRejectedAsync` is called with the holder's record, and the custom status is `Rejected`.
+2. **While the pipeline runs**, the lease is **renewed**: every `RenewalSeconds` (by default a third of the lease), a
+   durable timer that runs alongside the current stage fires and calls the *renew* activity, which extends the lease
+   from now. This covers every kind of stage the same way, including a polling step that waits for hours, a long
+   activity, a sub-orchestration and compensation in `OnStepFailedAsync`. So the lease only needs to outlast the
+   time between two renewals, not the whole run.
+   - If a renewal finds that another run holds the lease (for example, after an outage longer than the lease), the
+     run stops with `RunLeaseLostException` instead of running alongside it.
+   - A renewal that fails (after its retries) is tolerated while the lease still has time left; the run stops with
+     `RunLeaseLostException` once the next attempt would come too late. With the default interval, one failed
+     renewal is tolerated.
+3. **When the run ends**, however it ends (completed, stopped, failed, compensated or rethrown), the orchestrator calls
+   the *release* activity. The record then stores how the run ended (`RunStatus`), when it finished and any error.
+4. **A run that stops renewing**, for example because it was terminated or its host was lost, blocks the orchestrator
+   only until its lease expires. A shorter lease recovers sooner; a longer one adds fewer renewals to the history. Each
+   renewal adds a timer and an activity call, so a 12-hour run with a 30-minute lease (renewed every 10 minutes) adds
+   about 72 renewals. For runs of hours, 30 to 60 minutes is a reasonable lease.
+
+The repository is called from activities because orchestration code replays and must not do I/O. Register the three
+activities once per app, forwarding to `RunLeaseService`, under `RunLeaseOptions.DefaultAcquireActivityName`,
+`DefaultRenewActivityName` and `DefaultReleaseActivityName`:
+
+```csharp
+public sealed class OrchestrationRunActivities
+{
+  private readonly RunLeaseService _leases;
+
+  public OrchestrationRunActivities(RunLeaseService leases) => _leases = leases;
+
+  [Function(RunLeaseOptions.DefaultAcquireActivityName)]
+  public Task<RunLeaseResult> Acquire([ActivityTrigger] RunLeaseRequest request, CancellationToken ct) => _leases.TryAcquireAsync(request, ct);
+
+  [Function(RunLeaseOptions.DefaultRenewActivityName)]
+  public Task<RunLeaseResult> Renew([ActivityTrigger] RunLeaseRequest request, CancellationToken ct) => _leases.RenewAsync(request, ct);
+
+  [Function(RunLeaseOptions.DefaultReleaseActivityName)]
+  public Task<bool> Release([ActivityTrigger] RunLeaseRelease release, CancellationToken ct) => _leases.ReleaseAsync(release, ct);
+}
+
+// Program.cs
+services.AddSingleton<IOrchestrationRunRepository, MyDatabaseRunRepository>();
+services.AddSingleton(sp => new RunLeaseService(sp.GetRequiredService<IOrchestrationRunRepository>(), TimeProvider.System));
+```
+
+| Type | Role |
+| --- | --- |
+| `IOrchestrationRunRepository` | One record per orchestrator name. `TryInsertAsync` (only if absent) and `TryReplaceAsync` (only if the ETag still matches) must be atomic and conditional. |
+| `InMemoryOrchestrationRunRepository` | A fake for tests and local development. It works within one process only, so it can't prevent runs across hosts or regions. |
+| `RunLeaseService` | The acquire, renew and release logic. A renewal only extends a lease the run still holds; it never takes a free one. Retries when it loses a write race, and is idempotent, because activities can run more than once. |
+| `OrchestrationRunRecord` | The stored state: holder instance, `RunStatus`, start, lease expiry, finish, error, ETag. |
+| `RunLeaseOptions` | Lease length, renewal interval, activity names, and the lease activities' `TaskOptions` (the orchestrator's `DefaultTaskOptions` when not set). |
+
+**Across regions**, the repository's store must apply its conditional writes globally: a single write region or strong
+consistency (for example Azure Cosmos DB with a single write region, or Azure SQL). With multi-region writes and
+last-writer-wins conflict resolution, two regions can each acquire the lease.
+
+| `RunLeaseLostException` | Stops a run that lost its lease mid-pipeline. The lease is released only if the run still holds it. |
+
+If the acquire activity fails after its retries (for example, the database is down), the orchestration fails without
+running the pipeline. If the release activity fails, the failure is logged, the run's result stands, and the lease expires
+on its own.
+
 ## What to override
 
 | Member | Required | Purpose |
@@ -180,6 +267,8 @@ Completion is noticed at most `maxIntervalSeconds` late, and never more than 8 m
 | `BuildOutput(state)` | Yes | Build the orchestration output. Called when the pipeline finishes or is stopped by `StopIf`. |
 | `DefaultTaskOptions` | No | Retry policy (or other `TaskOptions`) for steps that don't set their own. |
 | `OnStepFailedAsync(context, state, failure)` | No | Handle a failed step: compensate, return a fallback output. The default rethrows, so the orchestration fails. |
+| `RunLease` | No | Prevent concurrent runs of this orchestrator. See [Preventing concurrent runs](#preventing-concurrent-runs). Null (the default) allows them. |
+| `OnConcurrentRunRejectedAsync(context, state, current)` | No | Called instead of the pipeline when another run holds the lease. The default throws `ConcurrentRunRejectedException`. |
 
 ## Pipeline API
 
@@ -290,6 +379,10 @@ Feedback wanted from the pilot:
    - Are 1,000 checks and an 8-minute maximum interval the right limits? Together they cap a polling timeout at about 5.5 days.
      For polls that need more, the alternative is a dedicated polling orchestration
      that uses `ContinueAsNew` to reset its history. That needs the same activity-registration story as the first item.
+4. **Run leases.**
+   - The key is the orchestrator name, so an orchestrator has at most one run at a time. Should the key be
+     configurable, for example per input (one run per customer)?
+   - Should a rejected run wait for the lease (with a durable timer) instead of ending at once?
 
 Resolved: step results used to be looked up by string name (`GetResult<T>("ProcessPayment")`), which was checked only at
 runtime. They now use typed step handles.
