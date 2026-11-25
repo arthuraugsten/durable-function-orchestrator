@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/DurableFunctionOrchestrator.Sdk/DurableFunctionOrchestrator.Sdk.csproj" />
+    <Project Path="src/DurableFunctionOrchestrator/DurableFunctionOrchestrator.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/DurableFunctionOrchestrator.Sdk.Tests/DurableFunctionOrchestrator.Sdk.Tests.csproj" />
+  </Folder>
+</Solution>

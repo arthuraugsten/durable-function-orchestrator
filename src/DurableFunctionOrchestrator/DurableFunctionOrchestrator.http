@@ -1,0 +1,148 @@
+# Demo requests for the order orchestration.
+#
+# Prerequisites: Azurite running, then `func start` in this folder.
+# Works with the Visual Studio .http editor (17.12+), Rider, and the VS Code REST Client extension.
+#
+# Each scenario has two requests:
+#   1. POST /api/orders starts an orchestration and returns 202 with management URLs.
+#   2. GET the status URL from that response to see the result. Send it again until runtimeStatus is
+#      "Completed" or "Failed"; customStatus shows the pipeline's progress while it runs.
+#
+# Simulated failures (see Orders/OrderActivities.cs):
+#   - Payment over 10,000                 -> payment declined, reserved inventory released (compensation)
+#   - SKU starting with "OUT-OF-STOCK"    -> unhandled failure: the orchestration fails after 3 attempts (~6s)
+#   - Email ending with "@bounce.test"    -> confirmation fails, but the order still completes (ContinueOnError)
+
+@baseUrl = http://localhost:7071
+
+
+### ✅ 1. Happy path: every step runs, including loyalty points
+# Expected: runtimeStatus "Completed", output.status "Completed" with reservation, transaction,
+# tracking number (from the fulfillment sub-orchestration) and loyaltyPointsAwarded.
+# @name happyPath
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{
+  "orderId": "ORD-1001",
+  "customerEmail": "ada@contoso.com",
+  "loyaltyMemberId": "LOY-42",
+  "lines": [
+    { "sku": "KEYBOARD-01", "quantity": 2, "unitPrice": 49.99 },
+    { "sku": "MOUSE-07", "quantity": 1, "unitPrice": 15.00 }
+  ]
+}
+
+### ✅ 1. Status
+GET {{happyPath.response.body.$.statusQueryGetUri}}
+
+
+### ✅ 2. Happy path without a loyalty member: the loyalty step is skipped
+# Expected: runtimeStatus "Completed", output.loyaltyPointsAwarded null,
+# customStatus.skippedSteps ["AwardLoyaltyPoints"].
+# @name noLoyalty
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{
+  "orderId": "ORD-1002",
+  "customerEmail": "grace@contoso.com",
+  "lines": [
+    { "sku": "MONITOR-27", "quantity": 1, "unitPrice": 329.00 }
+  ]
+}
+
+### ✅ 2. Status
+GET {{noLoyalty.response.body.$.statusQueryGetUri}}
+
+
+### ⚠️ 3. Non-critical failure: the confirmation email bounces, the order still completes
+# Expected: runtimeStatus "Completed", output.status "Completed",
+# output.notes ["SendConfirmation failed: ... bounced."], customStatus.failedSteps ["SendConfirmation"].
+# @name emailBounces
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{
+  "orderId": "ORD-1003",
+  "customerEmail": "nobody@bounce.test",
+  "lines": [
+    { "sku": "HEADSET-03", "quantity": 1, "unitPrice": 89.90 }
+  ]
+}
+
+### ⚠️ 3. Status
+GET {{emailBounces.response.body.$.statusQueryGetUri}}
+
+
+### ❌ 4. Validation failure: the pipeline stops early (StopIf)
+# Expected: runtimeStatus "Completed" (stopping is not a failure), output.status "Rejected",
+# output.notes lists the validation errors, customStatus.status "Stopped".
+# @name invalidOrder
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{
+  "orderId": "ORD-1004",
+  "customerEmail": "",
+  "lines": []
+}
+
+### ❌ 4. Status
+GET {{invalidOrder.response.body.$.statusQueryGetUri}}
+
+
+### ❌ 5. Payment declined: compensation releases the reserved inventory
+# Expected: runtimeStatus "Completed", output.status "PaymentFailed" with the decline message.
+# The host log shows "Released inventory reservation ..." (the compensating activity).
+# @name paymentDeclined
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{
+  "orderId": "ORD-1005",
+  "customerEmail": "big.spender@contoso.com",
+  "lines": [
+    { "sku": "SERVER-RACK", "quantity": 1, "unitPrice": 12500.00 }
+  ]
+}
+
+### ❌ 5. Status
+GET {{paymentDeclined.response.body.$.statusQueryGetUri}}
+
+
+### ❌ 6. Unhandled failure: an out-of-stock SKU fails the orchestration
+# Expected (after ~6s of retries): runtimeStatus "Failed", with failure details mentioning
+# "Step 'ReserveInventory' (Activity 'ReserveInventory') failed: SKU 'OUT-OF-STOCK-99' is out of stock.",
+# customStatus.status "Failed". Nothing to compensate: no other step had completed besides validation and shipping.
+# @name outOfStock
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{
+  "orderId": "ORD-1006",
+  "customerEmail": "linus@contoso.com",
+  "lines": [
+    { "sku": "OUT-OF-STOCK-99", "quantity": 1, "unitPrice": 10.00 }
+  ]
+}
+
+### ❌ 6. Status
+GET {{outOfStock.response.body.$.statusQueryGetUri}}
+
+
+### ❌ 7. Bad request: rejected by the HTTP starter, no orchestration is started
+# Expected: 400 "Request body must be an order with an orderId."
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{
+  "customerEmail": "missing.id@contoso.com",
+  "lines": [
+    { "sku": "KEYBOARD-01", "quantity": 1, "unitPrice": 49.99 }
+  ]
+}
+
+
+### 🔎 List recent orchestration instances (built-in Durable Functions HTTP API)
+GET {{baseUrl}}/runtime/webhooks/durabletask/instances?top=20&showInput=true
