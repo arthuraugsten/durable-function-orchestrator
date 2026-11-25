@@ -39,7 +39,7 @@ internal static class PollingRunner
       switch (status.State)
       {
         case PollState.Completed:
-          logger.LogInformation("Polling step '{StepName}' completed after {CheckCount} check(s).", step.Name, check);
+          SdkLog.PollingCompleted(logger, step.Name, check);
           return status.Result!;
 
         case PollState.Failed:
@@ -56,7 +56,7 @@ internal static class PollingRunner
           waitSeconds = status.RetryAfterSeconds is int retryAfter && retryAfter > intervalSeconds
             ? Math.Min(retryAfter, Steps.MaxPollingIntervalSeconds)
             : intervalSeconds;
-          logger.LogInformation("Polling step '{StepName}': still pending after check {CheckCount}; next check in {WaitSeconds}s.", step.Name, check, waitSeconds);
+          SdkLog.PollingPending(logger, step.Name, check, waitSeconds);
           break;
 
         default:

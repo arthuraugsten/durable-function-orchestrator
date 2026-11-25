@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Logging;
-
 namespace DurableFunctionOrchestrator.Sdk.Internal;
 
 internal sealed class StopStage<TInput> : IPipelineStage<TInput>
@@ -19,7 +17,7 @@ internal sealed class StopStage<TInput> : IPipelineStage<TInput>
   {
     if (_predicate(runtime.State))
     {
-      runtime.Logger.LogInformation("Stopping pipeline: {Reason}", _reason);
+      SdkLog.PipelineStopping(runtime.Logger, _reason);
       runtime.State.Stop(_reason);
     }
 

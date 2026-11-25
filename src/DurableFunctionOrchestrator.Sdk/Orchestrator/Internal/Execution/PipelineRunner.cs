@@ -28,7 +28,7 @@ internal sealed class PipelineRunner<TInput>
     var state = new OrchestrationState<TInput>(input, context.InstanceId);
     var runtime = new PipelineRuntime<TInput>(context, state, _defaultTaskOptions, logger);
 
-    logger.LogInformation("Orchestration {InstanceId} starting pipeline with {StageCount} stage(s).", context.InstanceId, _stages.Count);
+    SdkLog.PipelineStarting(logger, context.InstanceId, _stages.Count);
 
     try
     {
@@ -40,18 +40,20 @@ internal sealed class PipelineRunner<TInput>
     }
     catch (StepFailedException failure)
     {
-      logger.LogError(failure, "Orchestration {InstanceId} failed at step '{StepName}'.", context.InstanceId, failure.Step.Name);
+      SdkLog.PipelineFailed(logger, failure, context.InstanceId, failure.Step.Name);
       ReportProgress(context, state, OrchestrationRunStatus.Failed, null, failure.Step.Name);
       return await onStepFailed(state, failure);
     }
 
     OrchestrationRunStatus finalStatus = state.IsStopped ? OrchestrationRunStatus.Stopped : OrchestrationRunStatus.Completed;
     ReportProgress(context, state, finalStatus, null, state.StopReason);
-    logger.LogInformation("Orchestration {InstanceId} finished with status {Status}.", context.InstanceId, finalStatus);
+    SdkLog.PipelineFinished(logger, context.InstanceId, finalStatus);
 
     return buildOutput(state);
   }
 
+  // Runs before every stage on every replay, so the name arrays are filled by plain loops
+  // into exactly-sized arrays (no LINQ iterators or resizing).
   private void ReportProgress(
     TaskOrchestrationContext context,
     OrchestrationState<TInput> state,
@@ -63,7 +65,32 @@ internal sealed class PipelineRunner<TInput>
       currentStage,
       _stages.Count,
       detail,
-      state.CompletedSteps.Select(step => step.Name).ToArray(),
-      state.SkippedSteps.Select(step => step.Name).ToArray(),
-      state.Failures.Keys.Select(step => step.Name).ToArray()));
+      Names(state.CompletedSteps),
+      Names(state.SkippedSteps),
+      Names(state.Failures.Keys, state.Failures.Count)));
+
+  private static string[] Names(IReadOnlyList<StepHandle> steps)
+  {
+    if (steps.Count == 0)
+      return [];
+
+    var names = new string[steps.Count];
+    for (int i = 0; i < names.Length; i++)
+      names[i] = steps[i].Name;
+
+    return names;
+  }
+
+  private static string[] Names(IEnumerable<StepHandle> steps, int count)
+  {
+    if (count == 0)
+      return [];
+
+    var names = new string[count];
+    int i = 0;
+    foreach (StepHandle step in steps)
+      names[i++] = step.Name;
+
+    return names;
+  }
 }

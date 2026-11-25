@@ -30,7 +30,7 @@ public sealed class CarrierActivities
   {
     HttpClient client = _httpClientFactory.CreateClient(HttpClientName);
     var requestUri = new Uri(client.BaseAddress!, "carrier/labels");
-    using HttpResponseMessage response = await client.PostAsJsonAsync(requestUri, request, cancellationToken);
+    using HttpResponseMessage response = await client.PostAsJsonAsync(requestUri, request, CarrierJsonContext.Default.LabelRequest, cancellationToken);
 
     if (response.StatusCode != HttpStatusCode.Accepted)
       throw new HttpRequestException($"Label request for shipment '{request.ShipmentId}' returned {(int)response.StatusCode} ({response.StatusCode}); expected 202 Accepted.");
@@ -63,13 +63,13 @@ public sealed class CarrierActivities
         return PollStatus<ShippingLabel>.Pending(retryAfterSeconds);
 
       case HttpStatusCode.OK:
-        ShippingLabel label = await response.Content.ReadFromJsonAsync<ShippingLabel>(cancellationToken)
+        ShippingLabel label = await response.Content.ReadFromJsonAsync(CarrierJsonContext.Default.ShippingLabel, cancellationToken)
           ?? throw new HttpRequestException($"Label at {operation.StatusUrl} returned 200 OK without a body.");
         _logger.LogInformation("Label {LabelId} is ready (tracking {TrackingNumber}).", label.LabelId, label.TrackingNumber);
         return PollStatus<ShippingLabel>.Completed(label);
 
       case HttpStatusCode.UnprocessableEntity:
-        CarrierError? error = await response.Content.ReadFromJsonAsync<CarrierError>(cancellationToken);
+        CarrierError? error = await response.Content.ReadFromJsonAsync(CarrierJsonContext.Default.CarrierError, cancellationToken);
         return PollStatus<ShippingLabel>.Failed(error?.Error ?? "The carrier rejected the label.");
 
       default:

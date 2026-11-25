@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
@@ -36,9 +37,9 @@ public static class SimulatedCarrierApi
     [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "carrier/labels")] HttpRequestData req,
     FunctionContext context)
   {
-    LabelRequest? request = await req.ReadFromJsonAsync<LabelRequest>();
+    LabelRequest? request = await JsonSerializer.DeserializeAsync(req.Body, CarrierJsonContext.Default.LabelRequest, context.CancellationToken);
     if (request is null || string.IsNullOrWhiteSpace(request.ShipmentId))
-      return await JsonAsync(req, HttpStatusCode.BadRequest, new CarrierError("A shipmentId is required."));
+      return await JsonAsync(req, HttpStatusCode.BadRequest, new CarrierError("A shipmentId is required."), CarrierJsonContext.Default.CarrierError);
 
     bool rejected = request.Skus.Any(sku => sku.StartsWith(OversizedSkuPrefix, StringComparison.OrdinalIgnoreCase));
     bool slow = request.Skus.Any(sku => sku.StartsWith(SlowCarrierSkuPrefix, StringComparison.OrdinalIgnoreCase));
@@ -59,29 +60,30 @@ public static class SimulatedCarrierApi
   {
     string[] parts = jobId.Split('.', 3);
     if (parts.Length != 3 || !long.TryParse(parts[1], out long readyAt))
-      return await JsonAsync(req, HttpStatusCode.NotFound, new CarrierError($"Unknown label job '{jobId}'."));
+      return await JsonAsync(req, HttpStatusCode.NotFound, new CarrierError($"Unknown label job '{jobId}'."), CarrierJsonContext.Default.CarrierError);
 
     if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() < readyAt)
       return await PendingAsync(req, jobId);
 
     string shipmentId = parts[2];
     return parts[0] == Rejected
-      ? await JsonAsync(req, HttpStatusCode.UnprocessableEntity, new CarrierError($"Carrier rejected shipment '{shipmentId}': an item exceeds the size limit."))
-      : await JsonAsync(req, HttpStatusCode.OK, new ShippingLabel($"LBL-{shipmentId}", $"TRK{readyAt}"));
+      ? await JsonAsync(req, HttpStatusCode.UnprocessableEntity, new CarrierError($"Carrier rejected shipment '{shipmentId}': an item exceeds the size limit."), CarrierJsonContext.Default.CarrierError)
+      : await JsonAsync(req, HttpStatusCode.OK, new ShippingLabel($"LBL-{shipmentId}", $"TRK{readyAt}"), CarrierJsonContext.Default.ShippingLabel);
   }
 
   private static async Task<HttpResponseData> PendingAsync(HttpRequestData req, string jobId)
   {
-    HttpResponseData response = await JsonAsync(req, HttpStatusCode.Accepted, new CarrierJob(jobId, "Running"));
+    HttpResponseData response = await JsonAsync(req, HttpStatusCode.Accepted, new CarrierJob(jobId, "Running"), CarrierJsonContext.Default.CarrierJob);
     response.Headers.Add("Location", new Uri(req.Url, $"/api/carrier/labels/{Uri.EscapeDataString(jobId)}").ToString());
     return response;
   }
 
-  private static async Task<HttpResponseData> JsonAsync<T>(HttpRequestData req, HttpStatusCode statusCode, T body)
+  // Serializes straight into the response body with generated metadata: no intermediate string.
+  private static async Task<HttpResponseData> JsonAsync<T>(HttpRequestData req, HttpStatusCode statusCode, T body, JsonTypeInfo<T> typeInfo)
   {
     HttpResponseData response = req.CreateResponse(statusCode);
     response.Headers.Add("Content-Type", "application/json; charset=utf-8");
-    await response.WriteStringAsync(JsonSerializer.Serialize(body, JsonSerializerOptions.Web));
+    await JsonSerializer.SerializeAsync(response.Body, body, typeInfo);
     return response;
   }
 }

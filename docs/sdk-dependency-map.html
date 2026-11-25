@@ -1,0 +1,571 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Orchestrator SDK Dependencies</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Layout: a layered left-to-right graph (consumer → declare → build → run → data), with the selected class's trees beside it. */
+  :root {
+    --bg: #f4f6f8;
+    --surface: #ffffff;
+    --fg: #17202b;
+    --muted: #5a6573;
+    --line: #cfd6df;
+    --edge: #9aa5b3;
+    --dep: #c2410c;
+    --use: #0e7490;
+    --l-app: #9a5b13;
+    --l-public: #1d5fd1;
+    --l-building: #a3326c;
+    --l-execution: #2b7a3b;
+    --l-definitions: #5b4fc4;
+    --font-sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #10151b; --surface: #18202a; --fg: #e3e9f0; --muted: #98a4b3; --line: #2d3946; --edge: #4f5d6d;
+      --dep: #ff8a4c; --use: #4cc9e0;
+      --l-app: #e2a65e; --l-public: #6ea8ff; --l-building: #f07ab4; --l-execution: #6fd38a; --l-definitions: #a79cff;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #10151b; --surface: #18202a; --fg: #e3e9f0; --muted: #98a4b3; --line: #2d3946; --edge: #4f5d6d;
+    --dep: #ff8a4c; --use: #4cc9e0;
+    --l-app: #e2a65e; --l-public: #6ea8ff; --l-building: #f07ab4; --l-execution: #6fd38a; --l-definitions: #a79cff;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  .page {
+    max-width: 1640px;
+    margin: 0 auto;
+    padding-block: 28px 48px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    display: grid;
+    gap: 22px;
+  }
+  header { display: grid; gap: 6px; }
+  .eyebrow { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  h1 { margin: 0; font-size: 28px; font-weight: 600; line-height: 1.2; text-wrap: balance; }
+  h2 { margin: 0; font-size: 17px; font-weight: 600; text-wrap: balance; }
+  .lede { margin: 0; max-width: 72ch; color: var(--muted); }
+  code, .mono { font-family: var(--font-mono); font-size: 0.92em; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+  .control { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); }
+  select, .seg button {
+    font: inherit; font-size: 14px; color: var(--fg); background: var(--surface);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px;
+  }
+  select { font-family: var(--font-mono); font-size: 13px; }
+  .seg { display: inline-flex; }
+  .seg button { border-radius: 0; cursor: pointer; margin-left: -1px; }
+  .seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+  .seg button:last-child { border-radius: 0 6px 6px 0; }
+  .seg button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); position: relative; }
+  input[type="checkbox"] { accent-color: var(--fg); width: 16px; height: 16px; }
+  :focus-visible { outline: 2px solid var(--dep); outline-offset: 2px; }
+
+  figure { margin: 0; display: grid; gap: 10px; min-width: 0; }
+  .canvas {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+  svg.graph { display: block; height: auto; font-family: var(--font-mono); }
+  figcaption { font-size: 13.5px; color: var(--muted); max-width: 90ch; }
+  .key { display: inline-flex; align-items: center; gap: 6px; margin-right: 14px; white-space: nowrap; }
+  .key i { display: inline-block; width: 18px; height: 0; border-top: 2px solid; vertical-align: middle; }
+  .key i.dep { border-color: var(--dep); }
+  .key i.use { border-color: var(--use); }
+  .key i.back { border-top-style: dashed; border-color: var(--edge); }
+  .key b.dt { font: 600 10px var(--font-mono); border: 1px solid var(--muted); border-radius: 3px; padding: 0 3px; color: var(--muted); }
+
+  /* Graph marks */
+  .col-label { font-family: var(--font-sans); font-size: 12.5px; font-weight: 600; fill: var(--fg); }
+  .col-sub { font-family: var(--font-sans); font-size: 11.5px; fill: var(--muted); }
+  .edge { fill: none; stroke: var(--edge); stroke-width: 1; opacity: 0.55; }
+  .edge.back { stroke-dasharray: 4 3; }
+  .edge.dim { opacity: 0.12; }
+  .edge.dep { stroke: var(--dep); stroke-width: 1.8; opacity: 1; }
+  .edge.use { stroke: var(--use); stroke-width: 1.8; opacity: 1; }
+  .m-default path { fill: var(--edge); }
+  .m-dep path { fill: var(--dep); }
+  .m-use path { fill: var(--use); }
+  .node { cursor: pointer; }
+  .node rect.box { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  .node text.name { font-size: 11.5px; fill: var(--fg); }
+  .node text.dt { font-size: 9px; font-weight: 600; fill: var(--muted); }
+  .node rect.dt { fill: none; stroke: var(--muted); stroke-width: 0.8; }
+  .node:hover rect.box { stroke: var(--fg); }
+  .node:focus { outline: none; }
+  .node:focus-visible rect.box { stroke: var(--dep); stroke-width: 2; }
+  .node.dim { opacity: 0.32; }
+  .node.dep rect.box { stroke: var(--dep); stroke-width: 1.8; }
+  .node.use rect.box { stroke: var(--use); stroke-width: 1.8; }
+  .node.selected rect.box { fill: var(--fg); stroke: var(--fg); }
+  .node.selected text.name { fill: var(--bg); font-weight: 600; }
+  .node.selected text.dt { fill: var(--bg); }
+  .node.selected rect.dt { stroke: var(--bg); }
+
+  .below { display: grid; gap: 22px; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: start; }
+  @media (max-width: 920px) { .below { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; display: grid; gap: 14px; min-width: 0; }
+  .title-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+  .title-row h2 { font-family: var(--font-mono); font-size: 18px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px; }
+  .pill { font-family: var(--font-mono); font-size: 11.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+  .pill .sw { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+  .role { margin: 0; max-width: 68ch; }
+  .lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .lists h3, .trees h3 { margin: 0 0 6px; font-size: 12px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font: 12.5px var(--font-mono); color: var(--fg); background: transparent; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 5px; padding: 2px 7px;
+  }
+  .chip:hover { border-color: var(--fg); }
+  .chips.dep .chip { border-color: color-mix(in srgb, var(--dep) 55%, var(--line)); }
+  .chips.use .chip { border-color: color-mix(in srgb, var(--use) 55%, var(--line)); }
+  .none { font-size: 13.5px; color: var(--muted); }
+
+  .tabs { display: flex; gap: 6px; }
+  .tabs button {
+    font: inherit; font-size: 13.5px; cursor: pointer; background: transparent; color: var(--muted);
+    border: 0; border-bottom: 2px solid transparent; padding: 2px 2px 4px;
+  }
+  .tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: currentColor; }
+  .tabs button.t-dep[aria-selected="true"] { border-bottom-color: var(--dep); }
+  .tabs button.t-use[aria-selected="true"] { border-bottom-color: var(--use); }
+  .tree { font-family: var(--font-mono); font-size: 12.5px; overflow-x: auto; max-height: 420px; overflow-y: auto; }
+  .tree ul { list-style: none; margin: 0; padding-left: 18px; border-left: 1px solid var(--line); }
+  .tree > ul { padding-left: 0; border-left: 0; }
+  .tree li { padding: 1px 0; white-space: nowrap; }
+  .tree button { font: inherit; color: var(--fg); background: none; border: 0; padding: 0 2px; cursor: pointer; border-radius: 3px; }
+  .tree button:hover { text-decoration: underline; }
+  .tree .seen { color: var(--muted); }
+  .tree .count { color: var(--muted); }
+
+  .notes { display: grid; gap: 14px; }
+  .note h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+  .note p { margin: 0; color: var(--fg); max-width: 70ch; }
+  .note .muted { color: var(--muted); }
+  @media (prefers-reduced-motion: no-preference) { .edge, .node { transition: opacity 120ms ease; } }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <header>
+    <div class="eyebrow">DurableFunctionOrchestrator.Sdk · src/…/Orchestrator</div>
+    <h1>Orchestrator SDK Dependencies</h1>
+    <p class="lede">Every class in the SDK and the example app's classes that use it, with an arrow wherever one type references another in code. Select a class to trace its dependency tree in both directions.</p>
+  </header>
+
+  <div class="controls" aria-label="Map controls">
+    <label class="control" for="pick">Class
+      <select id="pick"></select>
+    </label>
+    <div class="control">Trace
+      <div class="seg" role="group" aria-label="Trace direction" id="direction">
+        <button type="button" data-v="both" aria-pressed="true">Both</button>
+        <button type="button" data-v="dep" aria-pressed="false">Depends on</button>
+        <button type="button" data-v="use" aria-pressed="false">Used by</button>
+      </div>
+    </div>
+    <div class="control">Depth
+      <div class="seg" role="group" aria-label="Trace depth" id="depth">
+        <button type="button" data-v="full" aria-pressed="true">Full tree</button>
+        <button type="button" data-v="direct" aria-pressed="false">Direct only</button>
+      </div>
+    </div>
+    <label class="control" for="showApp"><input type="checkbox" id="showApp" checked> Show example app</label>
+  </div>
+
+  <figure>
+    <div class="canvas"><svg class="graph" id="graph" role="group" aria-label="Dependency graph of the orchestrator SDK. Columns run from the example app, through the public API, internal building, execution and definitions, to the public data types."></svg></div>
+    <figcaption>
+      <span class="key"><i class="dep"></i>depends on</span>
+      <span class="key"><i class="use"></i>used by</span>
+      <span class="key"><i class="back"></i>points back to an earlier column</span>
+      <span class="key"><b class="dt">DT</b> calls Durable Task directly</span>
+      <br>Each arrow points from a class to a class it references. Columns follow the SDK folders, ordered so most arrows run left to right.
+    </figcaption>
+  </figure>
+
+  <div class="below">
+    <section class="panel" id="details" aria-live="polite"></section>
+    <section class="panel notes" aria-labelledby="notes-title">
+      <h2 id="notes-title">What the map shows</h2>
+      <div class="note">
+        <h3>Durable Task is called from three classes</h3>
+        <p><code>PipelineRunner</code> publishes the custom status, <code>StepInvoker</code> calls activities and sub-orchestrations, and <code>PollingRunner</code> creates timers and reads the clock. <span class="muted"><code>ActivityOrchestrator</code> only reads the input and creates the replay-safe logger.</span></p>
+      </div>
+      <div class="note">
+        <h3>Four arrows point back up by design</h3>
+        <p><code>StepHandle → StepInvoker</code> is the one-line hook that supplies a step's result type, and <code>StepHandle → PollingDefinition</code> is a polling handle carrying its configuration. <code>PollingValidator</code> and <code>PollingRunner → Steps</code> read the public limits <code>MaxPollingChecks</code> and <code>MaxPollingIntervalSeconds</code>.</p>
+      </div>
+      <div class="note">
+        <h3>Definitions reach into Execution twice</h3>
+        <p><code>IPipelineStage</code> takes a <code>PipelineRuntime</code>, and <code>PollingDefinition</code> holds a <code>PollingSchedule</code>, both of which live in <code>Internal/Execution</code>. Moving those two records into <code>Internal/Definitions</code> would make every arrow between the internal folders point one way. <span class="muted">Not changed yet.</span></p>
+      </div>
+      <div class="note">
+        <h3 id="app-note-title">The example app</h3>
+        <p id="app-note"></p>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+  // Columns follow the SDK folders. Public types appear twice: the API you call (column 1) and the data you hold (column 5).
+  const COLUMNS = [
+    { label: "Example app", sub: "Orders/", color: "app" },
+    { label: "Public API", sub: "declare a pipeline", color: "public" },
+    { label: "Internal · Building", sub: "validation at startup", color: "building" },
+    { label: "Internal · Execution", sub: "all run logic", color: "execution" },
+    { label: "Internal · Definitions", sub: "the declared pipeline", color: "definitions" },
+    { label: "Public types", sub: "handles, state, results", color: "public" },
+  ];
+
+  const NODES = [
+    // Example app
+    { id: "OrderProcessingOrchestrator", col: 0, kind: "sealed class", folder: "Orders/", vis: "app", role: "The example order pipeline: validate, reserve stock and quote shipping, charge, fulfil, notify. Compensates payment and fulfilment failures." },
+    { id: "FulfillmentOrchestrator", col: 0, kind: "sealed class", folder: "Orders/", vis: "app", role: "Sub-orchestration: creates the shipment, polls the carrier's HTTP API for a label, schedules pickup." },
+    { id: "CarrierActivities", col: 0, kind: "sealed class", folder: "Orders/", vis: "app", role: "The start and check activities of the label polling step. They send the HTTP requests and map responses to PollStatus." },
+    { id: "OrderJsonContext", col: 0, kind: "partial class", folder: "Orders/", vis: "app", role: "Source-generated JSON metadata for every payload that passes through Durable Task." },
+    // Public API
+    { id: "ActivityOrchestrator", col: 1, kind: "abstract class", folder: "Orchestrator/", vis: "public", dtNote: true, role: "The base class. RunAsync builds the pipeline from ConfigurePipeline and hands it to PipelineRunner." },
+    { id: "OrchestrationPipelineBuilder", col: 1, kind: "sealed class", folder: "Pipeline/", vis: "public", role: "Fluent Step, Parallel and StopIf. Creates a stage for each call." },
+    { id: "ParallelStageBuilder", col: 1, kind: "sealed class", folder: "Pipeline/", vis: "public", role: "Collects the steps of one Parallel stage." },
+    { id: "Steps", col: 1, kind: "static class", folder: "Steps/", vis: "public", role: "Factory for step handles: Activity, SubOrchestration and Polling. Also holds the polling limits." },
+    // Building
+    { id: "StepFactory", col: 2, kind: "sealed class", folder: "Internal/Building/", vis: "internal", role: "Turns a handle, input builder and options into a PipelineStep. Rejects duplicate step names." },
+    { id: "PollingValidator", col: 2, kind: "static class", folder: "Internal/Building/", vis: "internal", role: "Validates Steps.Polling arguments, the 8-minute cap and the check budget, then creates the PollingDefinition." },
+    // Execution
+    { id: "PipelineRunner", col: 3, kind: "sealed class", folder: "Internal/Execution/", vis: "internal", dt: true, role: "Runs the stages in order, publishes progress as the custom status, and routes a step failure to OnStepFailedAsync." },
+    { id: "StopStage", col: 3, kind: "sealed class", folder: "Internal/Execution/", vis: "internal", role: "The StopIf stage: ends the pipeline when its predicate holds." },
+    { id: "StepStage", col: 3, kind: "sealed class", folder: "Internal/Execution/", vis: "internal", role: "Runs one step, or a parallel group with fan-out/fan-in, and records outcomes in declaration order." },
+    { id: "StepInvoker", col: 3, kind: "static class", folder: "Internal/Execution/", vis: "internal", dt: true, role: "Calls the activity or sub-orchestration behind a handle, or hands polling steps to PollingRunner." },
+    { id: "PollingRunner", col: 3, kind: "static class", folder: "Internal/Execution/", vis: "internal", dt: true, role: "The polling loop: start, durable timer, check, until the operation completes, fails or times out." },
+    { id: "PollingSchedule", col: 3, kind: "sealed record", folder: "Internal/Execution/", vis: "internal", role: "Interval and backoff maths, shared by the runner and the budget check." },
+    { id: "PipelineRuntime", col: 3, kind: "sealed record", folder: "Internal/Execution/", vis: "internal", role: "What a stage gets while it runs: the context, the state, default task options and the logger." },
+    { id: "SdkLog", col: 3, kind: "static partial class", folder: "Internal/Execution/", vis: "internal", role: "The SDK's log messages, generated at compile time with [LoggerMessage]." },
+    // Definitions
+    { id: "OrchestrationRunStatus", col: 4, kind: "enum", folder: "Internal/Definitions/", vis: "internal", role: "Running, Completed, Stopped or Failed: the progress status values." },
+    { id: "IPipelineStage", col: 4, kind: "interface", folder: "Internal/Definitions/", vis: "internal", role: "The contract every stage implements: a description and ExecuteAsync." },
+    { id: "PipelineStep", col: 4, kind: "sealed record", folder: "Internal/Definitions/", vis: "internal", role: "A declared step: its handle, input builder and options. Data only." },
+    { id: "StepOutcome", col: 4, kind: "readonly record struct", folder: "Internal/Definitions/", vis: "internal", role: "How one step ended: succeeded with a result, skipped, or failed." },
+    { id: "StepOutcomeKind", col: 4, kind: "enum", folder: "Internal/Definitions/", vis: "internal", role: "Succeeded, Skipped or Failed." },
+    { id: "PollingDefinition", col: 4, kind: "sealed record", folder: "Internal/Definitions/", vis: "internal", role: "A polling step's configuration: start step, check step, schedule and timeout." },
+    // Public types
+    { id: "OrchestrationProgress", col: 5, kind: "sealed record", folder: "Results/", vis: "public", role: "The custom status published before each stage and at the end." },
+    { id: "OrchestrationState", col: 5, kind: "sealed class", folder: "Results/", vis: "public", role: "The input plus every step's outcome, keyed by handle. Passed to input builders, conditions and BuildOutput." },
+    { id: "StepFailedException", col: 5, kind: "sealed class", folder: "Results/", vis: "public", role: "Raised to OnStepFailedAsync, carrying the failed step's handle and failure details." },
+    { id: "StepOptions", col: 5, kind: "sealed class", folder: "Pipeline/", vis: "public", role: "Per-step When, WithRetry, WithOptions and ContinueOnError." },
+    { id: "StepHandle", col: 5, kind: "record + sealed record<TResult>", folder: "Steps/", vis: "public", role: "A typed reference to a step: what it calls, and the key its result and failures are recorded under." },
+    { id: "StepKind", col: 5, kind: "enum", folder: "Steps/", vis: "public", role: "Activity, SubOrchestration or Polling." },
+    { id: "PollStatus", col: 5, kind: "sealed record<TResult>", folder: "Polling/", vis: "public", role: "What a polling check step returns: Pending, Completed with a result, or Failed." },
+    { id: "PollState", col: 5, kind: "enum", folder: "Polling/", vis: "public", role: "Pending, Completed or Failed." },
+    { id: "PollingErrorTypes", col: 5, kind: "static class", folder: "Polling/", vis: "public", role: "The error types of failures raised by polling itself: OperationFailed and TimedOut." },
+  ];
+
+  // From → to: "from" references "to" in code, ignoring comments and strings.
+  // tests/DurableFunctionOrchestrator.Sdk.Tests/Docs/DependencyMapTests.cs checks this block against the source:
+  // when a class's dependencies change, update this block (the test lists the arrows to add or remove).
+  // <dependencies>
+  const DEPS = {
+    OrderProcessingOrchestrator: ["FulfillmentOrchestrator", "ActivityOrchestrator", "Steps", "StepHandle", "OrchestrationPipelineBuilder", "OrchestrationState", "StepFailedException"],
+    FulfillmentOrchestrator: ["ActivityOrchestrator", "Steps", "StepHandle", "OrchestrationPipelineBuilder", "OrchestrationState", "PollStatus"],
+    CarrierActivities: ["PollStatus"],
+    OrderJsonContext: ["PollStatus", "OrchestrationProgress"],
+    ActivityOrchestrator: ["PipelineRunner", "OrchestrationPipelineBuilder", "OrchestrationState", "StepFailedException"],
+    OrchestrationPipelineBuilder: ["StepFactory", "IPipelineStage", "StepStage", "StopStage", "ParallelStageBuilder", "StepOptions", "OrchestrationState", "StepHandle"],
+    ParallelStageBuilder: ["StepFactory", "PipelineStep", "StepOptions", "OrchestrationState", "StepHandle"],
+    Steps: ["PollingValidator", "PollStatus", "StepHandle", "StepKind"],
+    StepFactory: ["PipelineStep", "StepOptions", "OrchestrationState", "StepHandle"],
+    PollingValidator: ["PollingDefinition", "PollingSchedule", "StepHandle", "StepKind", "Steps"],
+    PipelineRunner: ["IPipelineStage", "OrchestrationRunStatus", "PipelineRuntime", "SdkLog", "OrchestrationProgress", "OrchestrationState", "StepFailedException", "StepHandle"],
+    StopStage: ["IPipelineStage", "PipelineRuntime", "SdkLog", "OrchestrationState"],
+    StepStage: ["IPipelineStage", "PipelineStep", "StepOutcome", "StepOutcomeKind", "PipelineRuntime", "SdkLog", "StepFailedException", "StepHandle"],
+    StepInvoker: ["PollingRunner", "StepHandle", "StepKind"],
+    PollingRunner: ["PollingDefinition", "SdkLog", "PollState", "PollStatus", "PollingErrorTypes", "StepHandle", "Steps"],
+    PollingSchedule: [],
+    PipelineRuntime: ["OrchestrationState"],
+    SdkLog: ["OrchestrationRunStatus", "StepKind"],
+    OrchestrationRunStatus: [],
+    IPipelineStage: ["PipelineRuntime"],
+    PipelineStep: ["StepOptions", "OrchestrationState", "StepHandle"],
+    StepOutcome: ["StepOutcomeKind"],
+    StepOutcomeKind: [],
+    PollingDefinition: ["PollingSchedule", "StepHandle"],
+    OrchestrationProgress: [],
+    OrchestrationState: ["StepHandle"],
+    StepFailedException: ["StepHandle"],
+    StepOptions: ["OrchestrationState"],
+    StepHandle: ["PollingDefinition", "StepInvoker", "StepKind"],
+    StepKind: [],
+    PollStatus: ["PollState"],
+    PollState: [],
+    PollingErrorTypes: [],
+  };
+  // </dependencies>
+
+  const byId = Object.fromEntries(NODES.map(n => [n.id, n]));
+  const USERS = Object.fromEntries(NODES.map(n => [n.id, []]));
+  for (const [from, tos] of Object.entries(DEPS))
+    for (const to of tos) USERS[to].push(from);
+
+  const state = { selected: "StepStage", direction: "both", depth: "full", showApp: true, tab: "dep" };
+
+  const G = { COL: 250, W: 196, H: 28, ROW: 38, PAD_X: 20, TOP: 66, RIGHT: 96, BOTTOM: 18 };
+  const SVG = "http://www.w3.org/2000/svg";
+  const el = (name, attrs = {}, parent) => {
+    const node = document.createElementNS(SVG, name);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (parent) parent.appendChild(node);
+    return node;
+  };
+
+  const visible = id => state.showApp || byId[id].col !== 0;
+
+  function closure(start, map) {
+    const seen = new Set();
+    const queue = [...map[start]];
+    while (queue.length) {
+      const id = queue.shift();
+      if (seen.has(id) || id === start || !visible(id)) continue;
+      seen.add(id);
+      queue.push(...map[id]);
+    }
+    return seen;
+  }
+
+  function layout() {
+    const cols = COLUMNS.map((_, c) => NODES.filter(n => n.col === c && visible(n.id)));
+    const shown = cols.map((list, c) => ({ list, c })).filter(x => x.list.length);
+    const maxRows = Math.max(...cols.map(list => list.length));
+    const pos = {};
+    shown.forEach(({ list, c }, slot) => {
+      const offset = (maxRows - list.length) / 2;
+      list.forEach((n, i) => {
+        pos[n.id] = { x: G.PAD_X + slot * G.COL, y: G.TOP + (offset + i) * G.ROW, slot };
+      });
+    });
+    const width = G.PAD_X + (shown.length - 1) * G.COL + G.W + G.RIGHT;
+    const height = G.TOP + maxRows * G.ROW + G.BOTTOM;
+    return { pos, shown, width, height };
+  }
+
+  function edgePath(a, b) {
+    const ay = a.y + G.H / 2, by = b.y + G.H / 2;
+    if (b.slot > a.slot) {
+      const sx = a.x + G.W, ex = b.x - 4, dx = (ex - sx) * 0.5;
+      return { d: `M${sx},${ay} C${sx + dx},${ay} ${ex - dx},${by} ${ex},${by}`, back: false };
+    }
+    if (b.slot < a.slot) {
+      const sx = a.x, ex = b.x + G.W + 4;
+      return { d: `M${sx},${ay} C${sx - 70},${ay} ${ex + 70},${by} ${ex},${by}`, back: true };
+    }
+    const x = a.x + G.W, bulge = 26 + Math.abs(by - ay) * 0.16;
+    return { d: `M${x},${ay} C${x + bulge},${ay} ${x + bulge},${by} ${x + 4},${by}`, back: false };
+  }
+
+  function render() {
+    const svg = document.getElementById("graph");
+    svg.replaceChildren();
+    const { pos, shown, width, height } = layout();
+    svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    svg.setAttribute("width", width);
+
+    const defs = el("defs", {}, svg);
+    for (const kind of ["default", "dep", "use"]) {
+      const m = el("marker", { id: `arrow-${kind}`, class: `m-${kind}`, viewBox: "0 0 8 8", refX: "7", refY: "4", markerWidth: "7", markerHeight: "7", orient: "auto-start-reverse" }, defs);
+      el("path", { d: "M0,0 L8,4 L0,8 z" }, m);
+    }
+
+    shown.forEach(({ c }, slot) => {
+      const x = G.PAD_X + slot * G.COL;
+      const head = el("g", {}, svg);
+      el("circle", { cx: x + 5, cy: 21, r: 4, fill: `var(--l-${COLUMNS[c].color})` }, head);
+      el("text", { x: x + 15, y: 25, class: "col-label" }, head).textContent = COLUMNS[c].label;
+      el("text", { x: x + 15, y: 41, class: "col-sub" }, head).textContent = COLUMNS[c].sub;
+    });
+
+    const sel = state.selected;
+    const deps = state.depth === "full" ? closure(sel, DEPS) : new Set(DEPS[sel].filter(visible));
+    const users = state.depth === "full" ? closure(sel, USERS) : new Set(USERS[sel].filter(visible));
+    const showDep = state.direction !== "use", showUse = state.direction !== "dep";
+
+    const edgeKind = (from, to) => {
+      if (showDep && (from === sel || (state.depth === "full" && deps.has(from))) && deps.has(to)) return "dep";
+      if (showUse && (to === sel || (state.depth === "full" && users.has(to))) && users.has(from)) return "use";
+      return null;
+    };
+
+    const plain = el("g", {}, svg), lit = el("g", {}, svg);
+    for (const [from, tos] of Object.entries(DEPS)) {
+      if (!visible(from)) continue;
+      for (const to of tos) {
+        if (!visible(to)) continue;
+        const { d, back } = edgePath(pos[from], pos[to]);
+        const kind = edgeKind(from, to);
+        const path = el("path", { d, class: `edge${back ? " back" : ""}${kind ? " " + kind : " dim"}`, "marker-end": `url(#arrow-${kind || "default"})` }, kind ? lit : plain);
+        el("title", {}, path).textContent = `${from} → ${to}`;
+      }
+    }
+
+    for (const n of NODES) {
+      if (!visible(n.id)) continue;
+      const p = pos[n.id];
+      let cls = "node";
+      if (n.id === sel) cls += " selected";
+      else if (showDep && deps.has(n.id)) cls += " dep";
+      else if (showUse && users.has(n.id)) cls += " use";
+      else cls += " dim";
+      const g = el("g", { class: cls, transform: `translate(${p.x},${p.y})`, tabindex: "0", role: "button", "aria-label": `${n.id}, ${n.kind} in ${n.folder}. Select to trace.`, "data-id": n.id }, svg);
+      el("rect", { class: "box", width: G.W, height: G.H, rx: 5 }, g);
+      el("circle", { cx: 12, cy: G.H / 2, r: 3.5, fill: `var(--l-${COLUMNS[n.col].color})` }, g);
+      el("text", { class: "name", x: 22, y: G.H / 2 + 4 }, g).textContent = n.id;
+      if (n.dt) {
+        el("rect", { class: "dt", x: G.W - 26, y: 8, width: 20, height: 12, rx: 2 }, g);
+        el("text", { class: "dt", x: G.W - 16, y: 17.5, "text-anchor": "middle" }, g).textContent = "DT";
+      }
+      g.addEventListener("click", () => select(n.id));
+      g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(n.id); } });
+    }
+
+    renderDetails();
+  }
+
+  function chips(list, cls) {
+    const ids = list.filter(visible);
+    if (!ids.length) return `<p class="none">None.</p>`;
+    return `<div class="chips ${cls}">${ids.map(id => `<button type="button" class="chip" data-go="${id}">${id}</button>`).join("")}</div>`;
+  }
+
+  // Depth-first tree; a class already shown higher up is marked instead of expanded again, so cycles terminate.
+  function treeHtml(root, map) {
+    const seen = new Set([root]);
+    const walk = id => {
+      const kids = map[id].filter(visible);
+      if (!kids.length) return "";
+      return `<ul>${kids.map(k => {
+        if (seen.has(k)) return `<li><button type="button" data-go="${k}" class="seen">${k}</button> <span class="seen">↻ shown above</span></li>`;
+        seen.add(k);
+        return `<li><button type="button" data-go="${k}">${k}</button>${walk(k)}</li>`;
+      }).join("")}</ul>`;
+    };
+    const body = walk(root);
+    return body || `<p class="none">Nothing.</p>`;
+  }
+
+  function renderDetails() {
+    const n = byId[state.selected];
+    const panel = document.getElementById("details");
+    const tabMap = state.tab === "dep" ? DEPS : USERS;
+    panel.innerHTML = `
+      <div class="title-row">
+        <h2>${n.id}</h2>
+        <div class="meta">
+          <span class="pill"><span class="sw" style="background: var(--l-${COLUMNS[n.col].color})"></span>${n.folder}</span>
+          <span class="pill">${n.vis === "app" ? "example app" : n.vis}</span>
+          <span class="pill">${n.kind}</span>
+          ${n.dt ? `<span class="pill">calls Durable Task</span>` : ""}
+          ${n.dtNote ? `<span class="pill">reads input, creates logger</span>` : ""}
+        </div>
+      </div>
+      <p class="role">${n.role}</p>
+      <div class="lists">
+        <div><h3>Depends on · ${DEPS[n.id].filter(visible).length} direct, ${closure(n.id, DEPS).size} in tree</h3>${chips(DEPS[n.id], "dep")}</div>
+        <div><h3>Used by · ${USERS[n.id].filter(visible).length} direct, ${closure(n.id, USERS).size} in tree</h3>${chips(USERS[n.id], "use")}</div>
+      </div>
+      <div class="trees">
+        <div class="tabs" role="tablist" aria-label="Dependency tree">
+          <button type="button" role="tab" class="t-dep" data-tab="dep" aria-selected="${state.tab === "dep"}">Dependency tree</button>
+          <button type="button" role="tab" class="t-use" data-tab="use" aria-selected="${state.tab === "use"}">Dependents tree</button>
+        </div>
+        <div class="tree" role="tabpanel"><ul><li><strong>${n.id}</strong>${treeHtml(n.id, tabMap)}</li></ul></div>
+      </div>`;
+    panel.querySelectorAll("[data-go]").forEach(b => b.addEventListener("click", () => select(b.dataset.go)));
+    panel.querySelectorAll("[data-tab]").forEach(b => b.addEventListener("click", () => { state.tab = b.dataset.tab; renderDetails(); }));
+  }
+
+  function select(id) {
+    if (!visible(id)) { state.showApp = true; document.getElementById("showApp").checked = true; }
+    state.selected = id;
+    document.getElementById("pick").value = id;
+    render();
+  }
+
+  function fillPicker() {
+    const pick = document.getElementById("pick");
+    pick.replaceChildren();
+    COLUMNS.forEach((col, c) => {
+      const items = NODES.filter(n => n.col === c && visible(n.id));
+      if (!items.length) return;
+      const group = document.createElement("optgroup");
+      group.label = col.label;
+      for (const n of items) {
+        const o = document.createElement("option");
+        o.value = n.id; o.textContent = n.id;
+        group.appendChild(o);
+      }
+      pick.appendChild(group);
+    });
+    pick.value = state.selected;
+  }
+
+  function wireSegment(id, key) {
+    const seg = document.getElementById(id);
+    seg.querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+      state[key] = b.dataset.v;
+      seg.querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+      render();
+    }));
+  }
+
+  function appNote() {
+    const sdk = new Set();
+    for (const n of NODES.filter(n => n.col === 0))
+      for (const d of DEPS[n.id]) if (byId[d].col !== 0) sdk.add(d);
+    const top = NODES.filter(n => n.col !== 0)
+      .map(n => [n.id, USERS[n.id].length])
+      .sort((a, b) => b[1] - a[1])[0];
+    document.getElementById("app-note").innerHTML =
+      `The app uses ${sdk.size} public SDK types and no internal ones: ${[...sdk].map(s => `<code>${s}</code>`).join(", ")}. ` +
+      `The most depended-on class overall is <code>${top[0]}</code>, with ${top[1]} direct dependents.`;
+  }
+
+  document.getElementById("pick").addEventListener("change", e => select(e.target.value));
+  document.getElementById("showApp").addEventListener("change", e => {
+    state.showApp = e.target.checked;
+    if (!visible(state.selected)) state.selected = "ActivityOrchestrator";
+    fillPicker();
+    render();
+  });
+  wireSegment("direction", "direction");
+  wireSegment("depth", "depth");
+  fillPicker();
+  appNote();
+  render();
+</script>
+</body>
+</html>

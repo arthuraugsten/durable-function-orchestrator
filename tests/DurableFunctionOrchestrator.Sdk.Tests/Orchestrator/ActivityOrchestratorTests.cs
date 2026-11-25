@@ -200,6 +200,28 @@ public sealed class ActivityOrchestratorTests
   }
 
   [Fact]
+  public async Task Parallel_branches_after_a_fatal_failure_are_still_recorded_including_continued_failures()
+  {
+    var fatal = Steps.Activity<string>("Fatal");
+    var optional = Steps.Activity<string>("Optional");
+    var ok = Steps.Activity<string>("Ok");
+    var context = new FakeOrchestrationContext().Fails("Fatal").Fails("Optional", "optional down").Returns("Ok", "ok-result");
+    var orchestrator = new TestOrchestrator<string>(
+      pipeline => pipeline.Parallel(parallel => parallel
+        .Step(fatal)
+        .Step(optional, configure: step => step.ContinueOnError())
+        .Step(ok)),
+      onStepFailed: (_, state, _) => Task.FromResult(state));
+
+    OrchestrationState<string> state = await orchestrator.RunAsync(context, "x");
+
+    Assert.Equal(fatal, orchestrator.HandledFailure?.Step);
+    Assert.Equal("optional down", state.Failures[optional].ErrorMessage);
+    Assert.Equal("ok-result", state.GetResult(ok));
+    Assert.Equal([ok], state.CompletedSteps);
+  }
+
+  [Fact]
   public async Task ContinueOnError_records_the_failure_and_continues()
   {
     var notify = Steps.Activity("Notify");
@@ -338,6 +360,27 @@ public sealed class ActivityOrchestratorTests
     Assert.Null(last.CurrentStage);
     Assert.Equal(["A"], last.CompletedSteps);
     Assert.Equal(["B"], last.SkippedSteps);
+    Assert.Empty(last.FailedSteps);
+  }
+
+  [Fact]
+  public async Task Progress_lists_steps_that_failed_and_continued_in_declaration_order()
+  {
+    var context = new FakeOrchestrationContext().Fails("Email").Fails("Sms").Returns("Done", 1);
+    var orchestrator = new TestOrchestrator<string>(pipeline => pipeline
+      .Parallel(parallel => parallel
+        .Step(Steps.Activity("Email"), configure: step => step.ContinueOnError())
+        .Step(Steps.Activity("Sms"), configure: step => step.ContinueOnError()))
+      .Step(Steps.Activity<int>("Done")));
+
+    await orchestrator.RunAsync(context, "x");
+
+    // Before stage 2 runs, progress already lists both failures.
+    Assert.Equal(["Email", "Sms"], context.StatusHistory[1].FailedSteps);
+
+    OrchestrationProgress last = context.StatusHistory[^1];
+    Assert.Equal(["Email", "Sms"], last.FailedSteps);
+    Assert.Equal(["Done"], last.CompletedSteps);
   }
 
   [Theory]

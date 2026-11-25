@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace DurableFunctionOrchestrator.Orders;
 
 public sealed record OrderRequest(
@@ -6,6 +8,9 @@ public sealed record OrderRequest(
   IReadOnlyList<OrderLine> Lines,
   string? LoyaltyMemberId = null)
 {
+  // Computed from Lines, so it is not serialized: otherwise it would be stored in every history
+  // event that carries the order.
+  [JsonIgnore]
   public decimal Subtotal => Lines.Sum(line => line.Quantity * line.UnitPrice);
 }
 

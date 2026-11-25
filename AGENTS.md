@@ -11,6 +11,7 @@ A **pilot** for adding pipeline orchestration to an SDK. It has three projects:
 | `src/DurableFunctionOrchestrator.Sdk` | **The SDK.** `ActivityOrchestrator<TInput, TOutput>`: a base class for Durable Task orchestrators that run a pipeline of activities and sub-orchestrations. Concrete classes declare *which* steps run; the base class handles *how* (sequencing, fan-out/fan-in, conditions, retries, polling of long-running operations, early exit, progress, failure handling). |
 | `src/DurableFunctionOrchestrator` | **Example Azure Functions app** (isolated worker) that uses the SDK: an order pipeline (`Orders/`) with a fulfillment sub-orchestration that polls a simulated asynchronous carrier HTTP API, compensation and an HTTP starter. |
 | `tests/DurableFunctionOrchestrator.Sdk.Tests` | **SDK unit tests** (xUnit v3), run against a fake `TaskOrchestrationContext`. |
+| `docs/` | **Contributor docs.** [`sdk-dependency-map.html`](docs/sdk-dependency-map.html) is an interactive map of every SDK class and the example app classes that use it, with each class's dependency tree. Open it in a browser. |
 
 The SDK's user-facing documentation is [`src/DurableFunctionOrchestrator.Sdk/README.md`](src/DurableFunctionOrchestrator.Sdk/README.md). It is also the NuGet package readme. Read it to understand the public API.
 
@@ -38,7 +39,8 @@ To run the example app: start Azurite, then run `func start` in `src/DurableFunc
 `POST /api/orders` and an `OrderRequest` JSON body. The quickest way is the ready-made requests in
 [`DurableFunctionOrchestrator.http`](src/DurableFunctionOrchestrator/DurableFunctionOrchestrator.http).
 
-**Before finishing any change:** the build passes, `dotnet test` passes, and the formatting check is clean.
+**Before finishing any change:** the build passes, `dotnet test` passes, and the formatting check is clean. If the change adds,
+removes, renames or rewires a class, the [dependency map](#dependency-map-docssdk-dependency-maphtml) is updated too.
 
 ### Expected build warnings (safe to ignore)
 
@@ -97,9 +99,34 @@ one type. **Namespaces are flat:** public types are in `DurableFunctionOrchestra
 | `Internal/Building/` | internal | Validation when handles and pipelines are declared: `StepFactory` (unique names), `PollingValidator`. |
 | `Internal/Execution/` | internal | **All run logic**, everything that calls Durable Task: `PipelineRunner` (stage loop, progress), `StepStage` / `StopStage`, `StepInvoker` (activity and sub-orchestration calls), `PollingRunner`, `PollingSchedule`. |
 
+**Logging in the SDK goes through `Internal/Execution/SdkLog`**, generated at compile time with `[LoggerMessage]`.
+Orchestrator code replays on every wake-up, so plain `logger.LogInformation(...)` calls would allocate an argument array
+and box values on every replay, even when the replay-safe logger discards the message. Add a method to `SdkLog` instead.
+Keep LINQ out of code that runs per stage or per check.
+
 Keep it that way: public types hold no run logic (`StepHandle.InvokeAsync` is only a one-line hook that supplies the
 result type to `StepInvoker`), and anything that calls the `TaskOrchestrationContext` goes in `Internal/Execution/`.
 The tests mirror the folders (`tests/.../Orchestrator/Polling/PollingStepTests.cs`).
+
+### Dependency map (`docs/sdk-dependency-map.html`)
+
+**Constraint: update the map whenever class dependencies change.** That means adding, removing or renaming a class in
+`src/DurableFunctionOrchestrator.Sdk/Orchestrator/` or a mapped class in `src/DurableFunctionOrchestrator/Orders/`, or
+adding or removing a reference from one mapped class to another. `DependencyMapTests` (`tests/.../Docs/`) enforces it:
+`dotnet test` fails until the map matches the code, and its message lists each arrow to add or remove and each class to
+add to or remove from the map.
+
+To update the map, edit the page's script:
+
+- **`DEPS`** (between `// <dependencies>` and `// </dependencies>`): one line per class, listing the mapped classes its
+  source file references. The test checks this block, ignoring comments and string literals, as it does in the code.
+- **`NODES`**: one entry per class, with its column (which follows its folder), kind, folder, visibility, a one-sentence
+  role, and `dt: true` if it calls the `TaskOrchestrationContext` directly. The test checks only that every SDK class
+  is listed, so keep the role and column accurate by hand.
+- **"What the map shows"**: if the change adds or removes an arrow that a note mentions (back-references, Durable Task
+  callers, Definitions → Execution), update the note.
+
+Then open the page in a browser and select the changed class to check it. The page is self-contained apart from Google Fonts.
 
 ## SDK design rules
 
@@ -133,7 +160,8 @@ These keep the SDK correct and consistent. Breaking them usually causes bugs tha
 2. Expose it through `OrchestrationPipelineBuilder` and, if it applies to parallel stages, `ParallelStageBuilder`.
 3. Add tests in `tests/DurableFunctionOrchestrator.Sdk.Tests` (see below).
 4. Update the SDK [`README.md`](src/DurableFunctionOrchestrator.Sdk/README.md): the API tables, an example, and the
-   "Open questions" list if the feature resolves or raises one.
+   "Open questions" list if the feature resolves or raises one. Update the
+   [dependency map](#dependency-map-docssdk-dependency-maphtml) for any new or rewired class.
 5. Use the feature in the example app if it helps show how the SDK is meant to be used.
 
 ### Breaking changes
@@ -179,6 +207,10 @@ Call out the break in your PR description.
   and check steps of the `FulfillmentOrchestrator` polling step. Its trigger values are constants on `SimulatedCarrierApi`:
   - a SKU starting with `OVERSIZED` makes the carrier reject the label (the polling step fails; payment is refunded);
   - a SKU starting with `SLOW-SHIP` never finishes in time (the polling step times out; payment is refunded).
+- **JSON is source-generated.** Add every type passed through Durable Task (orchestration or activity input/output)
+  to `OrderJsonContext`, and every carrier HTTP body to `CarrierJsonContext`. A type that's missing still works
+  through the reflection fallback, only more slowly. Computed properties get `[JsonIgnore]`, so they aren't stored
+  in the orchestration history.
 - **Activities that need services** (such as `IHttpClientFactory`) live in a non-static class with a standard
   constructor, like `CarrierActivities`. Simple activities stay `static`.
 - [`DurableFunctionOrchestrator.http`](src/DurableFunctionOrchestrator/DurableFunctionOrchestrator.http) has a demo request
