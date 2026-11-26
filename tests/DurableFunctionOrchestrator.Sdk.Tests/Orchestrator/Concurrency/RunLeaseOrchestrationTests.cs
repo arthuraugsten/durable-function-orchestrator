@@ -150,6 +150,19 @@ public sealed class RunLeaseOrchestrationTests
   }
 
   [Fact]
+  public void Renewal_timers_that_fire_early_renew_once_each_without_spinning()
+  {
+    // Each renewal timer fires a second early, as with the Azure Storage provider. The keeper renews when its timer
+    // fires instead of re-reading the clock, so an early timer means a slightly early renewal, never a burst of them.
+    FakeOrchestrationContext context = NewContext().Returns("A", 1).Takes("A", TimeSpan.FromHours(1)).TimersFireEarly(TimeSpan.FromSeconds(1));
+
+    Run(context, new TestOrchestrator<string>(pipeline => pipeline.Step(A), runLease: Lease));
+
+    Assert.Equal([1199d, 2398, 3597], context.CallSeconds(Renew));
+    Assert.Equal(RunStatus.Completed, Stored().Status);
+  }
+
+  [Fact]
   public void Twelve_hour_polling_step_keeps_its_lease_for_the_whole_run()
   {
     const int TwelveHours = 12 * 3600;

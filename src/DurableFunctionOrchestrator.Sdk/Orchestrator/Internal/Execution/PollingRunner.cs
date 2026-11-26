@@ -27,9 +27,14 @@ internal static class PollingRunner
 
     for (int check = 1; ; check++)
     {
+      // The wait that reaches the deadline is the last one: its check is final, whenever the timer actually
+      // fires. Storage providers can fire a timer early (Azure Storage queue delays are whole seconds), and
+      // re-reading the clock after an early final timer would schedule another timer to the same deadline,
+      // which fires at once, and spin until the clock passes it.
       DateTime fireAt = context.CurrentUtcDateTime.AddSeconds(waitSeconds);
-      if (deadline is { } limit && fireAt > limit)
-        fireAt = limit;
+      bool finalCheck = deadline is { } limit && fireAt >= limit;
+      if (finalCheck)
+        fireAt = deadline!.Value;
 
       await context.CreateTimer(fireAt, CancellationToken.None);
 
@@ -45,7 +50,7 @@ internal static class PollingRunner
         case PollState.Failed:
           throw Failure(step, PollingErrorTypes.OperationFailed, status.Error ?? "The operation failed.");
 
-        case PollState.Pending when context.CurrentUtcDateTime >= deadline:
+        case PollState.Pending when finalCheck || context.CurrentUtcDateTime >= deadline:
           throw Failure(step, PollingErrorTypes.TimedOut, $"The operation was still pending after {polling.TimeoutSeconds} second(s) ({check} check(s)).");
 
         case PollState.Pending:

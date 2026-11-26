@@ -254,6 +254,44 @@ public sealed class PollingStepTests
   }
 
   [Fact]
+  public async Task Timers_firing_early_end_polling_at_the_deadline_without_spinning()
+  {
+    // As with the Azure Storage provider, whose whole-second queue delays fire timers up to a second early.
+    var job = Steps.Polling(StartJob, CheckJob, intervalSeconds: 10, timeoutSeconds: 25);
+    var context = new FakeOrchestrationContext()
+      .TimersFireEarly(TimeSpan.FromSeconds(1))
+      .Returns("StartJob", "job-1")
+      .Returns("CheckJob", PollStatus<int>.Pending());
+    var orchestrator = new TestOrchestrator<string>(
+      pipeline => pipeline.Step(job),
+      onStepFailed: (_, state, _) => Task.FromResult(state));
+
+    await orchestrator.RunAsync(context, "x");
+
+    // Requested fire times; the last wait is shortened to the deadline and its check is the final one, even though
+    // that timer fired at 24s. Re-reading the clock there used to schedule timer after timer to 25s, each firing at once.
+    Assert.Equal([10d, 19d, 25d], context.TimerSeconds);
+    Assert.Equal(3, context.CallNames.Count(name => name == "CheckJob"));
+    Assert.Equal(PollingErrorTypes.TimedOut, orchestrator.HandledFailure!.FailureDetails.ErrorType);
+  }
+
+  [Fact]
+  public async Task Operation_completing_on_an_early_final_check_is_not_a_timeout()
+  {
+    var job = Steps.Polling(StartJob, CheckJob, intervalSeconds: 10, timeoutSeconds: 25);
+    int checks = 0;
+    var context = new FakeOrchestrationContext()
+      .TimersFireEarly(TimeSpan.FromSeconds(1))
+      .Returns("StartJob", "job-1")
+      .Handle("CheckJob", _ => ++checks < 3 ? PollStatus<int>.Pending() : PollStatus<int>.Completed(5));
+    var orchestrator = new TestOrchestrator<string>(pipeline => pipeline.Step(job));
+
+    OrchestrationState<string> state = await orchestrator.RunAsync(context, "x");
+
+    Assert.Equal(5, state.GetResult(job));
+  }
+
+  [Fact]
   public async Task Operation_completing_on_the_check_at_the_deadline_is_not_a_timeout()
   {
     var job = Steps.Polling(StartJob, CheckJob, intervalSeconds: 10, timeoutSeconds: 20);

@@ -25,6 +25,8 @@ internal sealed record TaskCall(StepKind Kind, string Name, object? Input, TaskO
 /// </remarks>
 internal sealed class FakeOrchestrationContext : TaskOrchestrationContext
 {
+  private const int MaxTimers = 10_000;
+
   private readonly object? _orchestrationInput;
   private readonly Dictionary<string, Func<object?, object?>> _handlers = new(StringComparer.Ordinal);
   private readonly Dictionary<string, TimeSpan> _durations = new(StringComparer.Ordinal);
@@ -33,6 +35,7 @@ internal sealed class FakeOrchestrationContext : TaskOrchestrationContext
   private readonly List<DateTime> _timers = [];
   private readonly List<Scheduled> _scheduled = [];
   private DateTime _currentUtcDateTime = Start;
+  private TimeSpan _timersFireEarlyBy = TimeSpan.Zero;
   private VirtualTimePump? _pump;
   private long _sequence;
 
@@ -115,6 +118,16 @@ internal sealed class FakeOrchestrationContext : TaskOrchestrationContext
   }
 
   /// <summary>
+  /// Makes durable timers fire up to <paramref name="by"/> before their fire time (but never before now), as the
+  /// Azure Storage provider does: its queue delays are whole seconds, so a 2-second timer can fire after 1 second.
+  /// </summary>
+  public FakeOrchestrationContext TimersFireEarly(TimeSpan by)
+  {
+    _timersFireEarlyBy = by;
+    return this;
+  }
+
+  /// <summary>
   /// Runs <paramref name="orchestration"/> in virtual time until it completes, and returns its result (or
   /// throws its exception). Throws if the orchestration waits on nothing that can complete.
   /// </summary>
@@ -157,13 +170,21 @@ internal sealed class FakeOrchestrationContext : TaskOrchestrationContext
 
   public override async Task CreateTimer(DateTime fireAt, CancellationToken cancellationToken)
   {
+    lock (_timers)
+    {
+      // A loop that keeps creating timers which fire at once never ends; fail the test instead of hanging it.
+      if (_timers.Count >= MaxTimers)
+        throw new InvalidOperationException($"The orchestration created more than {MaxTimers} timers: it is probably spinning.");
+    }
+
+    DateTime firesAt = fireAt - _timersFireEarlyBy;
     if (_pump is not null)
     {
       lock (_timers)
         _timers.Add(fireAt);
 
       var fired = new TaskCompletionSource();
-      Scheduled timer = Schedule(fireAt, () => fired.TrySetResult());
+      Scheduled timer = Schedule(firesAt, () => fired.TrySetResult());
       using (cancellationToken.Register(() =>
       {
         Unschedule(timer);
@@ -181,8 +202,8 @@ internal sealed class FakeOrchestrationContext : TaskOrchestrationContext
     lock (_timers)
     {
       _timers.Add(fireAt);
-      if (fireAt > _currentUtcDateTime)
-        _currentUtcDateTime = fireAt;
+      if (firesAt > _currentUtcDateTime)
+        _currentUtcDateTime = firesAt;
     }
   }
 

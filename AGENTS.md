@@ -233,6 +233,10 @@ Call out the break in your PR description.
   that races tasks against timers, such as run-lease renewal. It runs on one thread like the real runtime, fires timers
   in order, lets activities take time (`.Takes(name, duration)`), and records when each call started (`CallSeconds`).
   `OrchestrationTimeProvider` gives activity code (such as `RunLeaseService`) the same clock.
+- **Early timers:** `.TimersFireEarly(TimeSpan.FromSeconds(1))` makes timers fire before their due time, as the Azure Storage
+  provider's do (its queue delays are whole seconds). Code that waits for a time must stay correct when that happens: decide
+  from which timer fired, not by re-reading `CurrentUtcDateTime` and waiting again (that spins). The fake fails a test that
+  creates more than 10,000 timers, so a spinning loop fails fast instead of hanging the run.
 - The fake **does not simulate retries or replay**. Test retry configuration by checking the `TaskOptions` passed to each call
   (see `Default_task_options_apply_unless_a_step_overrides_them`). Behaviour that depends on replay needs a real host.
 - Test names describe behaviour in sentence form: `Parallel_failure_is_raised_after_every_branch_finishes_...`.

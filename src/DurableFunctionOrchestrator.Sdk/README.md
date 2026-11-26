@@ -132,7 +132,8 @@ public async Task<PollStatus<ShippingLabel>> CheckShippingLabel([ActivityTrigger
 - **Retry-After:** a check can return `Pending(retryAfterSeconds)`, for example from an HTTP `Retry-After` header. A hint
   longer than the current interval lengthens the next wait. A shorter one is ignored, as HTTP allows.
 - **Timeout:** `timeoutSeconds` is measured from when the start step completes. The last wait is shortened so a final check
-  happens exactly at the deadline. If the operation is still pending then, the step fails. Omit it to poll until the
+  happens exactly at the deadline. If the operation is still pending then, the step fails. That check is final even if
+  its timer fires early (see timer precision below). Omit it to poll until the
   operation completes or fails.
 - **Check budget:** a schedule that could make more than `Steps.MaxPollingChecks` (1,000) checks before its timeout is
   rejected when the handle is created. The error message suggests a backoff that fits. With checks at most 8 minutes apart,
@@ -144,6 +145,14 @@ public async Task<PollStatus<ShippingLabel>> CheckShippingLabel([ActivityTrigger
   sub-orchestration (as the example's `FulfillmentOrchestrator` does), so the parent's history stays small.
 - **The step name** defaults to the start step's name. `Kind` is `StepKind.Polling` and `TargetName` is the start
   step's target.
+
+### Timer precision
+
+Waits are durable timers, so they are as precise as the storage provider's timers. The **Azure Storage provider** (and
+Azurite) schedules a timer as a queue message whose delay is a whole number of seconds, so a timer can fire **up to about
+a second early**: a 2-second interval can come round in about 1 second. The SDK doesn't depend on exact timing (the
+final check before a timeout and run-lease renewals are decided by which timer fired, not by re-reading the clock),
+but very short intervals are approximate. Use intervals of 10 seconds or more when timing matters.
 
 ### Operations that take hours
 
