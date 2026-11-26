@@ -1,0 +1,12 @@
+{
+  // Newer Azure Storage SDKs send API versions an installed Azurite may not know yet; accept them.
+  "azurite.skipApiVersionCheck": true,
+  "azureFunctions.projectSubpath": "src/DurableFunctionOrchestrator",
+  "azureFunctions.deploySubpath": "src/DurableFunctionOrchestrator/bin/Release/net11.0/publish",
+  "azureFunctions.projectLanguage": "C#",
+  "azureFunctions.projectRuntime": "~4",
+  "debug.internalConsoleOptions": "neverOpen",
+  // F5 builds, then waits for the host and its worker. The default 60 seconds is tight after a restore.
+  "azureFunctions.pickProcessTimeout": 120,
+  "azureFunctions.preDeployTask": "publish (functions)"
+}

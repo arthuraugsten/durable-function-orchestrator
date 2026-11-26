@@ -1,0 +1,104 @@
+{
+  // Run and debug the example Functions app with the Azure Functions extension.
+  // Start Azurite first: Command Palette, "Azurite: Start" (blob, queue and table). See AGENTS.md, "Running locally".
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "build (functions)",
+      "command": "dotnet",
+      "args": [
+        "build",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary"
+      ],
+      "type": "process",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": "$msCompile",
+      "options": {
+        "cwd": "${workspaceFolder}/src/DurableFunctionOrchestrator"
+      }
+    },
+    {
+      // Not run before every start: a clean deletes the generated Functions extensions project, which then has to be
+      // restored again, slowing every F5 down. Run it on its own when the build output looks stale.
+      "label": "clean (functions)",
+      "command": "dotnet",
+      "args": [
+        "clean",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary"
+      ],
+      "type": "process",
+      "problemMatcher": "$msCompile",
+      "options": {
+        "cwd": "${workspaceFolder}/src/DurableFunctionOrchestrator"
+      }
+    },
+    {
+      "label": "clean release (functions)",
+      "command": "dotnet",
+      "args": [
+        "clean",
+        "--configuration",
+        "Release",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary"
+      ],
+      "type": "process",
+      "problemMatcher": "$msCompile",
+      "options": {
+        "cwd": "${workspaceFolder}/src/DurableFunctionOrchestrator"
+      }
+    },
+    {
+      "label": "publish (functions)",
+      "command": "dotnet",
+      "args": [
+        "publish",
+        "--configuration",
+        "Release",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary"
+      ],
+      "type": "process",
+      "dependsOn": "clean release (functions)",
+      "problemMatcher": "$msCompile",
+      "options": {
+        "cwd": "${workspaceFolder}/src/DurableFunctionOrchestrator"
+      }
+    },
+    {
+      // For manual testing without a debugger: the worker starts at once. A distinct label, so it never clashes
+      // with the extension's "func: host start" task below.
+      "label": "run host (no debugger)",
+      "detail": "Build, then run the Functions host on http://localhost:7071 for manual testing with the .http file.",
+      "type": "shell",
+      "command": "func",
+      "args": ["host", "start"],
+      "dependsOn": "build (functions)",
+      "options": {
+        "cwd": "${workspaceFolder}/src/DurableFunctionOrchestrator/bin/Debug/net11.0"
+      },
+      "isBackground": true,
+      "problemMatcher": "$func-dotnet-watch"
+    },
+    {
+      // The host task the Azure Functions extension runs ("func: host start"). F5 starts it through
+      // azureFunctions.pickProcess, which reads the worker's PID from the JSON output and attaches to it;
+      // --dotnet-isolated-debug keeps the worker paused until then. Run it on its own (Terminal, Run Task) for
+      // manual testing: the worker then waits for a debugger, so prefer F5 or remove the flag for that.
+      "type": "func",
+      "dependsOn": "build (functions)",
+      "options": {
+        "cwd": "${workspaceFolder}/src/DurableFunctionOrchestrator/bin/Debug/net11.0"
+      },
+      "command": "host start",
+      "args": ["--dotnet-isolated-debug", "--enable-json-output"],
+      "isBackground": true,
+      "problemMatcher": "$func-dotnet-watch"
+    }
+  ]
+}

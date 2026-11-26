@@ -1,4 +1,6 @@
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Azure.Functions.Worker;
@@ -14,7 +16,12 @@ namespace DurableFunctionOrchestrator.Orders;
 /// label is being produced, then <c>200</c> with the label or <c>422</c> if the carrier rejects it.
 /// </summary>
 /// <remarks>
-/// The API is stateless: each job ID encodes when the label is ready and whether it will be rejected.
+/// <c>Location</c> is a <b>relative</b> URL, resolved by the client against the URL it called. Behind a reverse proxy
+/// or API gateway the status URL then keeps the public host, scheme and any path prefix; an absolute URL built from
+/// the request the host received would point at the internal address instead.
+/// </remarks>
+/// <remarks>
+/// The API is stateless: each job ID encodes when the label is ready, whether it will be rejected, and the shipment.
 /// Some SKUs trigger simulated outcomes, so every polling outcome can be demonstrated:
 /// <list type="bullet">
 ///   <item>A SKU starting with <see cref="OversizedSkuPrefix"/>: the carrier rejects the label (the operation fails).</item>
@@ -49,7 +56,8 @@ public static class SimulatedCarrierApi
     context.GetLogger(nameof(SimulatedCarrierApi))
       .LogInformation("Carrier accepted label job {JobId} for shipment {ShipmentId}.", jobId, request.ShipmentId);
 
-    return await PendingAsync(req, jobId);
+    // Relative to POST .../carrier/labels, "labels/{jobId}" resolves to .../carrier/labels/{jobId}.
+    return await PendingAsync(req, jobId, location: $"labels/{Uri.EscapeDataString(jobId)}");
   }
 
   /// <summary>GET /api/carrier/labels/{jobId}: reports whether the label is ready.</summary>
@@ -62,27 +70,41 @@ public static class SimulatedCarrierApi
     if (parts.Length != 3 || !long.TryParse(parts[1], out long readyAt))
       return await JsonAsync(req, HttpStatusCode.NotFound, new CarrierError($"Unknown label job '{jobId}'."), CarrierJsonContext.Default.CarrierError);
 
+    // Relative to GET .../carrier/labels/{jobId}, "{jobId}" resolves to the same status URL.
     if (DateTimeOffset.UtcNow.ToUnixTimeSeconds() < readyAt)
-      return await PendingAsync(req, jobId);
+      return await PendingAsync(req, jobId, location: Uri.EscapeDataString(jobId));
 
     string shipmentId = parts[2];
     return parts[0] == Rejected
       ? await JsonAsync(req, HttpStatusCode.UnprocessableEntity, new CarrierError($"Carrier rejected shipment '{shipmentId}': an item exceeds the size limit."), CarrierJsonContext.Default.CarrierError)
-      : await JsonAsync(req, HttpStatusCode.OK, new ShippingLabel($"LBL-{shipmentId}", $"TRK{readyAt}"), CarrierJsonContext.Default.ShippingLabel);
+      : await JsonAsync(req, HttpStatusCode.OK, new ShippingLabel($"LBL-{shipmentId}", TrackingNumber(jobId)), CarrierJsonContext.Default.ShippingLabel);
   }
 
-  private static async Task<HttpResponseData> PendingAsync(HttpRequestData req, string jobId)
-  {
-    HttpResponseData response = await JsonAsync(req, HttpStatusCode.Accepted, new CarrierJob(jobId, "Running"), CarrierJsonContext.Default.CarrierJob);
-    response.Headers.Add("Location", new Uri(req.Url, $"/api/carrier/labels/{Uri.EscapeDataString(jobId)}").ToString());
-    return response;
-  }
+  /// <summary>
+  /// A tracking number unique to the label job (which includes the shipment), and the same on every poll of it:
+  /// "TRK" and 12 hex digits of the job ID's SHA-256.
+  /// </summary>
+  public static string TrackingNumber(string jobId) =>
+    "TRK" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(jobId)), 0, 6);
+
+  private static Task<HttpResponseData> PendingAsync(HttpRequestData req, string jobId, string location) =>
+    JsonAsync(
+      req,
+      HttpStatusCode.Accepted,
+      new CarrierJob(jobId, "Running"),
+      CarrierJsonContext.Default.CarrierJob,
+      location: new Uri(location, UriKind.Relative));
 
   // Serializes straight into the response body with generated metadata: no intermediate string.
-  private static async Task<HttpResponseData> JsonAsync<T>(HttpRequestData req, HttpStatusCode statusCode, T body, JsonTypeInfo<T> typeInfo)
+  // Every header is set before the body is written: with ASP.NET Core integration, writing the body sends the
+  // response, so a header added afterwards is silently dropped.
+  private static async Task<HttpResponseData> JsonAsync<T>(HttpRequestData req, HttpStatusCode statusCode, T body, JsonTypeInfo<T> typeInfo, Uri? location = null)
   {
     HttpResponseData response = req.CreateResponse(statusCode);
     response.Headers.Add("Content-Type", "application/json; charset=utf-8");
+    if (location is not null)
+      response.Headers.Add("Location", location.ToString());
+
     await JsonSerializer.SerializeAsync(response.Body, body, typeInfo);
     return response;
   }

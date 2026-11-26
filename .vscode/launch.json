@@ -1,0 +1,12 @@
+{
+  // Start Azurite first (Command Palette: "Azurite: Start"). See AGENTS.md, "Running locally".
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Attach to .NET Functions",
+      "type": "coreclr",
+      "request": "attach",
+      "processId": "${command:azureFunctions.pickProcess}"
+    }
+  ]
+}

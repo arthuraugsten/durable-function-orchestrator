@@ -1,6 +1,7 @@
 # Demo requests for the order orchestration.
 #
-# Prerequisites: Azurite running, then `func start` in this folder.
+# Prerequisites: Azurite running with all three services (VS Code: "Azurite: Start"), then the host: press F5 to debug,
+# or run the "run host (no debugger)" task. See AGENTS.md, "Running locally".
 # Works with the Visual Studio .http editor (17.12+), Rider, and the VS Code REST Client extension.
 #
 # Each scenario has two requests:
@@ -220,7 +221,7 @@ POST {{baseUrl}}/api/jobs/carrier-rate-sync
 GET {{rateSyncAgain.response.body.$.statusQueryGetUri}}
 
 
-### 🔎 Call the simulated carrier API directly: 202 Accepted with a Location header
+### 🔎 Call the simulated carrier API directly: 202 Accepted with a relative Location header (labels/{jobId})
 # @name carrierLabel
 POST {{baseUrl}}/api/carrier/labels
 Content-Type: application/json
@@ -232,7 +233,8 @@ Content-Type: application/json
 }
 
 ### 🔎 Poll the label: 202 for ~5s, then 200 with the label
-GET {{carrierLabel.response.headers.Location}}
+# Location is relative to the POST URL, so it is resolved against {{baseUrl}}/api/carrier/.
+GET {{baseUrl}}/api/carrier/{{carrierLabel.response.headers.Location}}
 
 
 ### 🔎 List recent orchestration instances (built-in Durable Functions HTTP API)

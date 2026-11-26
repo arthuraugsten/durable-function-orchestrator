@@ -14,3 +14,10 @@ TestResults/
 # NuGet packages produced by dotnet pack
 *.nupkg
 *.snupkg
+
+# Azurite (VS Code extension) data, written to the workspace folder
+__azurite_db_*.json
+__blobstorage__/
+__queuestorage__/
+__tablestorage__/
+AzuriteConfig

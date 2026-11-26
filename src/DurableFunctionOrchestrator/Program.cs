@@ -14,10 +14,18 @@ builder.Services
   .AddApplicationInsightsTelemetryWorkerService()
   .ConfigureFunctionsApplicationInsights();
 
-// Source-generated JSON for the order pipeline's payloads. Durable Functions (isolated) serializes
-// with WorkerOptions.Serializer, which is built from these options, so this covers orchestration and
-// activity inputs and outputs, and HTTP request bodies read with ReadFromJsonAsync.
-builder.Services.Configure<JsonSerializerOptions>(OrderJsonContext.AddTo);
+// The worker's JSON options. Durable Functions (isolated) serializes with WorkerOptions.Serializer, which is built
+// from these options, so they cover orchestration and activity payloads, orchestration outputs and custom status,
+// the starters' check-status responses, and HTTP request bodies read with ReadFromJsonAsync.
+// - camelCase: the worker's default keeps .NET's PascalCase names, so the starters would return
+//   "StatusQueryGetUri" and outputs "Status", while the .http file and clients expect "statusQueryGetUri" and
+//   "status". Reading stays case-insensitive, so payloads stored before this change still deserialize.
+// - Source-generated metadata for the order pipeline's types (OrderJsonContext), with reflection as the fallback.
+builder.Services.Configure<JsonSerializerOptions>(options =>
+{
+  options.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
+  OrderJsonContext.AddTo(options);
+});
 
 // Run leases: prevent concurrent runs of orchestrators that set RunLease (CarrierRateSyncOrchestrator).
 // The in-memory repository is a fake that works within one host only; replace it with a repository over

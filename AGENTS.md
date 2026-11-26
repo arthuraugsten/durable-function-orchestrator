@@ -35,9 +35,7 @@ dotnet build -p:EnforceCodeStyleInBuild=true --no-incremental  # check naming/st
 dotnet pack src/DurableFunctionOrchestrator.Sdk               # build the SDK NuGet package
 ```
 
-To run the example app: start Azurite, then run `func start` in `src/DurableFunctionOrchestrator`. Start an order with
-`POST /api/orders` and an `OrderRequest` JSON body. The quickest way is the ready-made requests in
-[`DurableFunctionOrchestrator.http`](src/DurableFunctionOrchestrator/DurableFunctionOrchestrator.http).
+To run the example app locally, see [Running locally](#running-locally).
 
 **Before finishing any change:** the build passes, `dotnet test` passes, and the formatting check is clean. If the change adds,
 removes, renames or rewires a class, the [dependency map](#dependency-map-docssdk-dependency-maphtml) is updated too.
@@ -47,6 +45,52 @@ removes, renames or rewires a class, the [dependency map](#dependency-map-docssd
 - `NU1902` (`Microsoft.AspNetCore.WebUtilities` 2.3.0): comes from a dependency of a Functions extension, inside the
   generated `obj/azure_functions/azure_functions.g.csproj`. It can't be fixed from this repo; it will clear when the extension packages update.
 - `AZFW0108` ("Functions extensions project was not restored prior to build"): appears on clean builds only.
+
+## Running locally
+
+The repo is set up to run and debug the example app in VS Code with the **Azure Functions extension**, and Azurite as
+the storage emulator. No Docker is needed.
+
+**One-time setup:**
+
+1. Install [Azure Functions Core Tools](https://learn.microsoft.com/azure/azure-functions/functions-run-local) v4 (`func`) and
+   the workspace's recommended extensions (`.vscode/extensions.json`): Azure Functions, C#, C# Dev Kit, Azurite and REST Client.
+2. If `src/DurableFunctionOrchestrator/local.settings.json` doesn't exist, copy
+   [`local.settings.example.json`](src/DurableFunctionOrchestrator/local.settings.example.json) to it. It's gitignored,
+   so keep any secrets you add there.
+
+**Every session:**
+
+1. Start Azurite with **all three services**: Command Palette, **Azurite: Start**. Blob alone isn't enough: Durable
+   Functions keeps its queues and history in the queue and table services. If table storage is missing, the host
+   starts but logs "The listener for function '...' was unable to start" for every orchestrator and activity, and
+   orchestrations never run.
+2. Then either:
+   - **Debugging:** press **F5** (**Attach to .NET Functions**). The Azure Functions extension builds, runs the
+     `func: host start` task with the worker paused (`--dotnet-isolated-debug`), reads the worker's PID from the host's
+     JSON output and attaches. Breakpoints in `Program.cs`, orchestrators, activities and SDK code all work.
+   - **Manual testing without a debugger:** run the task **run host (no debugger)** (Terminal, Run Task). Don't use the
+     `func: host start` task for this: its worker waits for a debugger.
+
+   The host listens on `http://localhost:7071`. Send the requests in
+   [`DurableFunctionOrchestrator.http`](src/DurableFunctionOrchestrator/DurableFunctionOrchestrator.http) with REST
+   Client ("Send Request" above each one).
+
+**Debugging orchestrators:** orchestrator code replays, so a breakpoint in `ConfigurePipeline`, an input builder or SDK
+code under `Internal/Execution/` is hit again every time the orchestration wakes up (after each activity, timer and
+lease renewal). Check `context.IsReplaying` in the Watch window to tell replays from the first run. Breakpoints in
+activities are hit once per execution.
+
+**Resetting state:** orchestration history lives in Azurite, and **Azurite: Clean** deletes every instance. Run leases
+live in the host's memory (`InMemoryOrchestrationRunRepository`), so restarting the host clears them.
+
+**If F5 fails** with "Failed to detect running Functions host", read the host's terminal output, not the extension's:
+
+- "actively refused ... 127.0.0.1:10000" (or 10001, 10002): an Azurite service isn't running.
+- "TypeLoadException ... ITelemetryInitializer": `Microsoft.ApplicationInsights.WorkerService` was upgraded to 3.x.
+  Keep it on 2.x until `Microsoft.Azure.Functions.Worker.ApplicationInsights` supports 3.x (see the csproj comment).
+- "The operation has timed out" right after the worker's PID: the worker waited for a debugger that never attached,
+  which is normal for the `func: host start` task when it's run without F5.
 
 ## Repository setup you must not break
 
@@ -207,7 +251,7 @@ Call out the break in your PR description.
   - a SKU starting with `OUT-OF-STOCK` fails `ReserveInventory` (unhandled failure: the orchestration fails);
   - an email ending with `@bounce.test` fails `SendConfirmation` (`ContinueOnError`: the order still completes).
 - **The carrier is a real HTTP API, simulated in the same app.** `SimulatedCarrierApi` (`/api/carrier/labels`) answers
-  `202` + `Location` and produces a label after a few seconds. `CarrierActivities` call it through the named
+  `202` + a relative `Location` (so status URLs survive a reverse proxy) and produces a label after a few seconds. `CarrierActivities` call it through the named
   `HttpClient` registered in `Program.cs` (`CarrierApiBaseUrl` setting, defaulting to the local host). They are the start
   and check steps of the `FulfillmentOrchestrator` polling step. Its trigger values are constants on `SimulatedCarrierApi`:
   - a SKU starting with `OVERSIZED` makes the carrier reject the label (the polling step fails; payment is refunded);
